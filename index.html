@@ -403,20 +403,51 @@ async function doSave(){
 }
 
 async function pushToSheets(rec){
-  if(!SHEETS_WEBAPP_URL||SHEETS_WEBAPP_URL==="YOUR_APPS_SCRIPT_WEBAPP_URL")return false;
-  const r=rec.result;
-  const row=[rec.date,rec.staff,r.mSold,r.lSold,r.bSold,r.cSold,r.totalCups,num(rec.pay_qr),num(rec.pay_cash),num(rec.grab_full),r.grabNet.toFixed(2),num(rec.lineman_full),r.linemanNet.toFixed(2),r.grossTotal.toFixed(2),r.netTotal.toFixed(2),r.rangeMin.toFixed(2),r.rangeMax.toFixed(2),r.statusKey==="ok"?"ถูกต้อง":r.statusKey==="low"?"ยอดน้อย":r.statusKey==="high"?"ยอดมาก":"ไม่มีข้อมูล",rec.id];
+  if(!SHEETS_WEBAPP_URL || SHEETS_WEBAPP_URL==="YOUR_APPS_SCRIPT_WEBAPP_URL") return false;
+
+  const r = rec.result;
+  const row = [
+    rec.date, rec.staff,
+    r.mSold, r.lSold, r.bSold, r.cSold, r.totalCups,
+    num(rec.pay_qr), num(rec.pay_cash),
+    num(rec.grab_full), r.grabNet.toFixed(2),
+    num(rec.lineman_full), r.linemanNet.toFixed(2),
+    r.grossTotal.toFixed(2), r.netTotal.toFixed(2),
+    r.rangeMin.toFixed(2), r.rangeMax.toFixed(2),
+    r.statusKey==="ok" ? "ถูกต้อง" :
+    r.statusKey==="low" ? "ยอดน้อย" :
+    r.statusKey==="high" ? "ยอดมาก" : "ไม่มีข้อมูล",
+    rec.id
+  ];
+
   try{
-    const resp=await fetch(SHEETS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:editingId?"update":"append",id:rec.id,row})});
+    const resp = await fetch(SHEETS_WEBAPP_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        action: editingId ? "update" : "append",
+        id: rec.id,
+        row
+      })
+    });
     return resp.ok;
-  }catch(e){console.warn("Sheets push failed:",e);return false;}
+  }catch(e){
+    console.warn("Sheets push failed:", e);
+    return false;
+  }
 }
 
 async function deleteRecord(id){
-  if(!confirm("ลบข้อมูลนี้ใช่ไหม?"))return;
+  if(!confirm("ลบข้อมูลนี้ใช่ไหม?")) return;
+
   await remove(ref(db,"records/"+id));
-  if(SHEETS_WEBAPP_URL&&SHEETS_WEBAPP_URL!=="YOUR_APPS_SCRIPT_WEBAPP_URL"){
-    fetch(SHEETS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"delete",id})}).catch(()=>{});
+
+  if(SHEETS_WEBAPP_URL && SHEETS_WEBAPP_URL!=="YOUR_APPS_SCRIPT_WEBAPP_URL"){
+    fetch(SHEETS_WEBAPP_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "delete", id })
+    }).catch(()=>{});
   }
 }
 
