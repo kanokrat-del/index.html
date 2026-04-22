@@ -97,45 +97,37 @@ window.onDateChange = function() {
 if (editingId) return;
 tryAutoFill(val("f-date"));
 };
-
+// --- ฟีเจอร์: ดึงยอดคงเหลือล่าสุดมาใส่ให้อัตโนมัติ (ฉบับปรับปรุงใหม่) ---
 function tryAutoFill(date) {
-  if (!date) return;
-  if (editingId) return; // กำลัง edit อยู่ ไม่ต้อง auto-fill
+  if (!date || editingId) return; 
 
-  const prev = prevDateOf(date);
   const recs = Object.values(allRecords);
-  const found = recs.find(r => r.date === prev);
+  if (recs.length === 0) return;
+
+  // ค้นหาใบงานล่าสุดที่วันที่ "น้อยกว่า" วันที่เลือกปัจจุบัน
+  const pastRecords = recs
+    .filter(r => r.date < date)
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  const found = pastRecords[0]; // เลือกใบงานที่ใหม่ที่สุดก่อนวันนี้
 
   if (found) {
-    const mLeft = found.m_left ?? "";
-    const lLeft = found.l_left ?? "";
-    const bLeft = found.b_left ?? "";
-    const cLeft = found.c_left ?? "";
+    // เอาค่า 'คงเหลือ' (left) จากใบงานนั้น มาใส่ในช่อง 'วันก่อน' (prev) ของวันนี้
+    g("m-prev").value = found.m_left ?? "0";
+    g("l-prev").value = found.l_left ?? "0";
+    g("b-prev").value = found.b_left ?? "0";
+    g("c-prev").value = found.c_left ?? "0";
+    
+    // สั่งคำนวณยอดขายใหม่ทันที
+    ["m","l","b","c"].forEach(calcSold);
 
-    // isEmpty = ผู้ใช้ยังไม่ได้กรอกเอง (value เป็น "" จริงๆ ไม่ใช่แค่ falsy)
-    const isEmpty = g("m-prev").value === "" && g("l-prev").value === "" &&
-                    g("b-prev").value === "" && g("c-prev").value === "";
-
-    if (isEmpty) {
-      // ใส่ค่าอัตโนมัติ — ใส่ "0" ถ้าคงเหลือเป็น 0 ด้วย (ไม่ใช่แค่ว่าง)
-      g("m-prev").value = mLeft !== "" ? mLeft : "0";
-      g("l-prev").value = lLeft !== "" ? lLeft : "0";
-      g("b-prev").value = bLeft !== "" ? bLeft : "0";
-      g("c-prev").value = cLeft !== "" ? cLeft : "0";
-      ["m","l","b","c"].forEach(calcSold);
-
-      g("auto-tag").style.display = "block";
-      g("auto-tag").innerHTML =
-        `✨ <strong>ดึงยอดคงเหลือจาก ${prev} มาให้อัตโนมัติ</strong><br>` +
-        `M: <strong>${mLeft||0}</strong> | L: <strong>${lLeft||0}</strong> | บานาน่า: <strong>${bLeft||0}</strong> | ครีมชีส: <strong>${cLeft||0}</strong>`;
-    } else {
-      // มีข้อมูลในช่องแล้ว — แสดง banner แจ้งเฉยๆ ไม่ทับ
-      g("auto-tag").style.display = "block";
-      g("auto-tag").innerHTML =
-        `📋 ยอดคงเหลือจาก ${prev}: M: ${mLeft||0} | L: ${lLeft||0} | บานาน่า: ${bLeft||0} | ครีมชีส: ${cLeft||0}` +
-        `<br><span style="font-size:11px;opacity:.8">มีข้อมูลในช่องแล้ว ไม่เติมอัตโนมัติ</span>`;
-    }
+    // แสดงแถบแจ้งเตือนสีเขียว
+    g("auto-tag").style.display = "block";
+    g("auto-tag").innerHTML = 
+      `✨ <strong>ดึงยอดคงเหลือล่าสุด (จากวันที่ ${found.date}) มาให้แล้ว</strong><br>` +
+      `M: <strong>${g("m-prev").value}</strong> | L: <strong>${g("l-prev").value}</strong> | บานาน่า: <strong>${g("b-prev").value}</strong> | ครีมชีส: <strong>${g("c-prev").value}</strong>`;
   } else {
+    // ถ้าไม่เคยมีบันทึกเลย ให้ซ่อนแถบแจ้งเตือน
     g("auto-tag").style.display = "none";
   }
 }
