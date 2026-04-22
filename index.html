@@ -8,392 +8,462 @@
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getDatabase, ref, push, set, remove, onValue, get } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+import { getDatabase, ref, push, set, remove, onValue, get }
+from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
 // ════════════════════════════════════════════════════════
-// 🔧 ตั้งค่าเชื่อมต่อ
+// 🔧 ตั้งค่า Firebase
 // ════════════════════════════════════════════════════════
 const firebaseConfig = {
-    apiKey: "AIzaSyC0IZc90rgTTxJdJRhYcO85Gf5D7FcW3nU",
-    authDomain: "bingsutusom-99fa0.firebaseapp.com",
-    databaseURL: "https://bingsutusom-99fa0-default-rtdb.asia-southeast1.firebasedatabase.app",
-    projectId: "bingsutusom-99fa0",
-    storageBucket: "bingsutusom-99fa0.firebasestorage.app",
-    messagingSenderId: "1068089490766",
-    appId: "1:1068089490766:web:ea0ed4c707e6187b37b21f",
-    measurementId: "G-G52DVFE9XM"
+apiKey: "AIzaSyC0IZc90rgTTxJdJRhYcO85Gf5D7FcW3nU",
+authDomain: "bingsutusom-99fa0.firebaseapp.com",
+databaseURL: "https://bingsutusom-99fa0-default-rtdb.asia-southeast1.firebasedatabase.app",
+projectId: "bingsutusom-99fa0",
+storageBucket: "bingsutusom-99fa0.firebasestorage.app",
+messagingSenderId: "1068089490766",
+appId: "1:1068089490766:web:ea0ed4c707e6187b37b21f",
+measurementId: "G-G52DVFE9XM"
 };
 
-// URL Google Sheets Web App ของคุณ
+// 🔧 Google Sheets Web App URL - ใส่ให้เรียบร้อยแล้ว
 const SHEETS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbw7Jh91nyN21QkhpeXFEbkXN6QlTFki5PPxdZKPe1GuLRMdzXhr-aR5SROiAmvwTQP9dA/exec";
 
 // ════════════════════════════════════════════════════════
-const PRICE_M_MIN=55, PRICE_M_MAX=69, PRICE_L_MIN=79, PRICE_L_MAX=99;
-const PRICE_BANANA=65, PRICE_CREAM=39, MAX_TOPPING=45, GP=0.34;
+const PRICE_M_MIN=55,PRICE_M_MAX=69,PRICE_L_MIN=79,PRICE_L_MAX=99;
+const PRICE_BANANA=65,PRICE_CREAM=39,MAX_TOPPING=45,GP=0.34;
 
 let app, db, recordsRef;
 let allRecords = {};
 let editingId = null;
 let lastResult = null;
-let isConfigured = true;
+let isConfigured = false;
 
-const g = id => document.getElementById(id);
-const val = id => g(id)?.value || "";
-const num = v => parseFloat(v) || 0;
+function checkConfig() {
+  return firebaseConfig.apiKey && firebaseConfig.apiKey !== "YOUR_API_KEY";
+}
+
+function initFirebase() {
+try {
+app = initializeApp(firebaseConfig);
+db = getDatabase(app);
+recordsRef = ref(db, "records");
+onValue(recordsRef, (snapshot) => {
+  allRecords = snapshot.val() || {};
+  renderHistory();
+  updateAnalysis(); // อัปเดตการวิเคราะห์ทุกครั้งที่ข้อมูลเปลี่ยน
+  if (!editingId) {
+    setTimeout(() => tryAutoFill(g("f-date").value), 100);
+  }
+});
+showStatus("🟢 เชื่อมต่อ Firebase และ Sheets แล้ว", "ok");
+isConfigured = true;
+g("setup-banner").style.display = "none";
+} catch(e) {
+showStatus("🔴 Firebase Error: " + e.message, "err");
+}
+}
+
+// ════════════════════════════════════════════════════════
+// UTILS
+// ════════════════════════════════════════════════════════
 const fmt = n => isNaN(n) ? "0.00" : parseFloat(n).toLocaleString("th-TH",{minimumFractionDigits:2,maximumFractionDigits:2});
+const num = v => parseFloat(v) || 0;
 const todayStr = () => new Date().toISOString().split("T")[0];
 const soldQty = (p,a,l) => Math.max(0, num(p)+num(a)-num(l));
-
-// Init Firebase
-function initFirebase() {
-    try {
-        app = initializeApp(firebaseConfig);
-        db = getDatabase(app);
-        recordsRef = ref(db, "records");
-        onValue(recordsRef, (snapshot) => {
-            allRecords = snapshot.val() || {};
-            renderHistory();
-            updateAnalysis(); // อัปเดตการวิเคราะห์ทุกครั้งที่ข้อมูลเปลี่ยน
-            if (!editingId) setTimeout(() => tryAutoFill(g("f-date").value), 100);
-        });
-        showStatus("🟢 เชื่อมต่อ Cloud สำเร็จ", "ok");
-    } catch(e) {
-        showStatus("🔴 Connection Error", "err");
-    }
-}
+const g = id => document.getElementById(id);
+const val = id => g(id)?.value || "";
 
 function showStatus(msg, type) {
-    const el = g("conn-status");
-    el.textContent = msg;
-    el.style.background = type==="ok" ? "#d1fae5" : "#fee2e2";
-    el.style.color = type==="ok" ? "#065f46" : "#991b1b";
+const el = g("conn-status");
+el.textContent = msg;
+el.style.background = type==="ok" ? "#d1fae5" : type==="err" ? "#fee2e2" : "#fff7ed";
+el.style.color = type==="ok" ? "#065f46" : type==="err" ? "#991b1b" : "#92400e";
+el.style.borderColor = type==="ok" ? "#6ee7b7" : type==="err" ? "#fca5a5" : "#fde68a";
 }
 
-// --- ฟังก์ชันดึงยอดคงเหลืออัตโนมัติ ---
+// ════════════════════════════════════════════════════════
+// FORM & CALCULATION
+// ════════════════════════════════════════════════════════
+window.onDateChange = function() {
+if (editingId) return;
+tryAutoFill(val("f-date"));
+};
+
 function tryAutoFill(date) {
-    if (!date || editingId) return; 
-    const recs = Object.values(allRecords);
-    const pastRecords = recs.filter(r => r.date < date).sort((a, b) => b.date.localeCompare(a.date));
-    const found = pastRecords[0];
-    if (found) {
-        g("m-prev").value = found.m_left ?? "0";
-        g("l-prev").value = found.l_left ?? "0";
-        g("b-prev").value = found.b_left ?? "0";
-        g("c-prev").value = found.c_left ?? "0";
-        ["m","l","b","c"].forEach(calcSold);
-        g("auto-tag").style.display = "block";
-        g("auto-tag").innerHTML = `✨ ดึงยอดคงเหลือจากวันที่ ${found.date} มาให้แล้ว`;
-    } else {
-        g("auto-tag").style.display = "none";
-    }
+  if (!date || editingId) return; 
+  const recs = Object.values(allRecords);
+  if (recs.length === 0) return;
+  const pastRecords = recs.filter(r => r.date < date).sort((a, b) => b.date.localeCompare(a.date));
+  const found = pastRecords[0];
+  if (found) {
+    g("m-prev").value = found.m_left ?? "0";
+    g("l-prev").value = found.l_left ?? "0";
+    g("b-prev").value = found.b_left ?? "0";
+    g("c-prev").value = found.c_left ?? "0";
+    ["m","l","b","c"].forEach(calcSold);
+    g("auto-tag").style.display = "block";
+    g("auto-tag").innerHTML = `✨ ดึงยอดคงเหลือจากวันที่ ${found.date} มาให้แล้ว`;
+  } else {
+    g("auto-tag").style.display = "none";
+  }
 }
 
 window.calcSold = function(k) {
-    const s = soldQty(val(k+"-prev"), val(k+"-add"), val(k+"-left"));
-    g(k+"-sold").textContent = s;
+const s = soldQty(val(k+"-prev"), val(k+"-add"), val(k+"-left"));
+g(k+"-sold").textContent = s;
+lastResult = null;
 };
+window.calcGrabNet = function() { g("grab-net").textContent = fmt(num(val("grab-full"))*(1-GP))+" ฿"; };
+window.calcLinemanNet = function() { g("lineman-net").textContent = fmt(num(val("lineman-full"))*(1-GP))+" ฿"; };
 
 window.doCalc = function() {
-    const mSold=soldQty(val("m-prev"),val("m-add"),val("m-left"));
-    const lSold=soldQty(val("l-prev"),val("l-add"),val("l-left"));
-    const bSold=soldQty(val("b-prev"),val("b-add"),val("b-left"));
-    const cSold=soldQty(val("c-prev"),val("c-add"),val("c-left"));
-    const totalCups=mSold+lSold+bSold+cSold;
-    const minExp=mSold*PRICE_M_MIN+lSold*PRICE_L_MIN+bSold*PRICE_BANANA+cSold*PRICE_CREAM;
-    const maxExp=mSold*PRICE_M_MAX+lSold*PRICE_L_MAX+bSold*PRICE_BANANA+cSold*PRICE_CREAM;
-    const rangeMin=minExp, rangeMax=maxExp+totalCups*MAX_TOPPING;
-    const qr=num(val("pay-qr")), cash=num(val("pay-cash"));
-    const grabFull=num(val("grab-full")), linemanFull=num(val("lineman-full"));
-    const grabNet=grabFull*(1-GP), linemanNet=linemanFull*(1-GP);
-    const grossTotal=qr+cash+grabFull+linemanFull;
-    const netTotal=qr+cash+grabNet+linemanNet;
-    
-    let statusKey = "ok", statusColor = "#22c55e";
-    if (totalCups===0) { statusKey="nodata"; statusColor="#94a3b8"; }
-    else if (grossTotal<rangeMin) { statusKey="low"; statusColor="#ef4444"; }
-    else if (grossTotal>rangeMax) { statusKey="high"; statusColor="#f97316"; }
-
-    lastResult={mSold,lSold,bSold,cSold,totalCups,minExp,maxExp,rangeMin,rangeMax,qr,cash,grabFull,linemanFull,grabNet,linemanNet,grossTotal,netTotal,statusKey,statusColor};
-    renderResult(lastResult);
+const mSold=soldQty(val("m-prev"),val("m-add"),val("m-left"));
+const lSold=soldQty(val("l-prev"),val("l-add"),val("l-left"));
+const bSold=soldQty(val("b-prev"),val("b-add"),val("b-left"));
+const cSold=soldQty(val("c-prev"),val("c-add"),val("c-left"));
+const totalCups=mSold+lSold+bSold+cSold;
+const minExp=mSold*PRICE_M_MIN+lSold*PRICE_L_MIN+bSold*PRICE_BANANA+cSold*PRICE_CREAM;
+const maxExp=mSold*PRICE_M_MAX+lSold*PRICE_L_MAX+bSold*PRICE_BANANA+cSold*PRICE_CREAM;
+const rangeMin=minExp, rangeMax=maxExp+totalCups*MAX_TOPPING;
+const qr=num(val("pay-qr")), cash=num(val("pay-cash"));
+const grabFull=num(val("grab-full")), linemanFull=num(val("lineman-full"));
+const grabNet=grabFull*(1-GP), linemanNet=linemanFull*(1-GP);
+const grossTotal=qr+cash+grabFull+linemanFull;
+const netTotal=qr+cash+grabNet+linemanNet;
+let statusKey, statusColor;
+if (totalCups===0){statusKey="nodata";statusColor="#94a3b8"}
+else if (grossTotal<rangeMin){statusKey="low";statusColor="#ef4444"}
+else if (grossTotal>rangeMax){statusKey="high";statusColor="#f97316"}
+else {statusKey="ok";statusColor="#22c55e"}
+lastResult={mSold,lSold,bSold,cSold,totalCups,minExp,maxExp,rangeMin,rangeMax,qr,cash,grabFull,linemanFull,grabNet,linemanNet,grossTotal,netTotal,statusKey,statusColor};
+renderResult(lastResult);
 };
 
 function renderResult(r) {
-    const box=g("result-box"); box.style.display="block"; box.style.borderColor=r.statusColor;
-    const banner=g("res-banner"); banner.style.background=r.statusColor;
-    banner.textContent = r.statusKey==="ok" ? "✅ ยอดถูกต้อง" : r.statusKey==="low" ? "❌ ยอดน้อยผิดปกติ" : "⚠️ ยอดสูงผิดปกติ";
-    
-    let h = `<div class="res-row bold"><span>รวมขายได้</span><span>${r.totalCups} รายการ</span></div>`;
-    h += `<div class="res-row"><span>ยอด Gross (เทียบช่วง)</span><span>${fmt(r.grossTotal)} ฿</span></div>`;
-    h += `<div class="divider"></div>`;
-    h += `<div class="res-row bold accent"><span>รายได้สุทธิร้าน</span><span>${fmt(r.netTotal)} ฿</span></div>`;
-    g("res-body").innerHTML = h;
-    g("btn-save").style.background = r.statusColor;
+const box=g("result-box"); box.style.display="block"; box.style.borderColor=r.statusColor;
+const banner=g("res-banner"); banner.style.background=r.statusColor;
+const S={
+ok:{icon:"✅",title:"ยอดถูกต้อง!",desc:`ยอดเงิน ${fmt(r.grossTotal)} ฿ อยู่ในช่วงที่เป็นไปได้`},
+low:{icon:"❌",title:"ยอดเงินน้อยกว่าที่ควร",desc:`ยอดเงิน ${fmt(r.grossTotal)} ฿ ต่ำกว่าขั้นต่ำ ${fmt(r.rangeMin)} ฿`},
+high:{icon:"⚠️",title:"ยอดเงินมากกว่าที่ควร",desc:`ยอดเงิน ${fmt(r.grossTotal)} ฿ เกินช่วงสูงสุด ${fmt(r.rangeMax)} ฿`},
+nodata:{icon:"ℹ️",title:"ยังไม่มีข้อมูล",desc:"กรุณากรอกข้อมูลก่อน"},
+};
+const st=S[r.statusKey];
+banner.textContent=st.icon+" "+st.title;
+const row=(l,v,cls="")=>`<div class="res-row ${cls}"><span class="lbl">${l}</span><span class="val">${v}</span></div>`;
+let h=`<div class="res-msg">${st.desc}</div><div class="divider"></div>`;
+h+=row("รวมขายทั้งหมด",r.totalCups+" รายการ","bold");
+h+=row("ยอดรวม Gross",fmt(r.grossTotal)+" ฿","bold accent");
+h+=row("รวมสุทธิร้านได้รับ",fmt(r.netTotal)+" ฿","bold");
+g("res-body").innerHTML=h;
+const btn=g("btn-save");
+btn.style.background=r.statusKey==="ok"?"#1c1917":r.statusColor;
+btn.textContent=editingId?"💾 อัปเดตข้อมูล":"💾 บันทึกข้อมูลไป Sheets";
 }
 
 // ════════════════════════════════════════════════════════
-// SAVE → Firebase + Google Sheets
+// SAVE & SYNC
 // ════════════════════════════════════════════════════════
 window.doSave = async function() {
-    if (!lastResult){alert("กรุณากดคำนวณก่อน");return}
-    if (!val("f-staff")){alert("กรุณาใส่ชื่อพนักงาน");return}
-
-    const btn=g("btn-save");
-    btn.textContent="⏳ กำลังส่งข้อมูล..."; btn.disabled=true;
-
-    const rec = {
-        id: editingId || Date.now().toString(),
-        date: val("f-date"), staff: val("f-staff"),
-        m_prev:val("m-prev"), m_add:val("m-add"), m_left:val("m-left"),
-        l_prev:val("l-prev"), l_add:val("l-add"), l_left:val("l-left"),
-        b_prev:val("b-prev"), b_add:val("b-add"), b_left:val("b-left"),
-        c_prev:val("c-prev"), c_add:val("c-add"), c_left:val("c-left"),
-        pay_qr:val("pay-qr"), pay_cash:val("pay-cash"),
-        grab_full:val("grab-full"), lineman_full:val("lineman-full"),
-        savedAt: new Date().toISOString(),
-        result: lastResult
-    };
-
-    try {
-        await set(ref(db, "records/"+rec.id), rec); // บันทึก Firebase
-        await pushToSheets(rec); // ส่งไป Google Sheets
-        alert("บันทึกสำเร็จ!");
-        clearForm();
-    } catch(e) {
-        alert("ผิดพลาด: " + e.message);
-    } finally {
-        btn.disabled=false;
-        btn.textContent="💾 บันทึกและส่งข้อมูลไป Google Sheets";
-    }
+if (!lastResult){alert("กรุณากดคำนวณก่อนบันทึก");return}
+if (!val("f-staff").trim()){alert("กรุณากรอกชื่อพนักงาน");return}
+const btn=g("btn-save");
+btn.textContent="⏳ กำลังบันทึก..."; btn.disabled=true;
+const rec = {
+id: editingId || Date.now().toString(),
+date: val("f-date"), staff: val("f-staff").trim(),
+m_prev:val("m-prev"),m_add:val("m-add"),m_left:val("m-left"),
+l_prev:val("l-prev"),l_add:val("l-add"),l_left:val("l-left"),
+b_prev:val("b-prev"),b_add:val("b-add"),b_left:val("b-left"),
+c_prev:val("c-prev"),c_add:val("c-add"),c_left:val("c-left"),
+pay_qr:val("pay-qr"), pay_cash:val("pay-cash"),
+grab_full:val("grab-full"), lineman_full:val("lineman-full"),
+savedAt: new Date().toISOString(),
+result: lastResult
+};
+try {
+await set(ref(db, "records/"+rec.id), rec);
+await pushToSheets(rec);
+btn.textContent = "✅ บันทึกสำเร็จ!";
+setTimeout(() => { clearForm(); switchTab('history'); }, 1000);
+} catch(e) {
+alert("เกิดข้อผิดพลาด: "+e.message);
+btn.disabled = false;
+}
 };
 
 async function pushToSheets(rec) {
-    if (!SHEETS_WEBAPP_URL) return;
-    const r = rec.result;
-    const row = [
-        rec.date, rec.staff, r.mSold, r.lSold, r.bSold, r.cSold, r.totalCups,
-        num(rec.pay_qr), num(rec.pay_cash), num(rec.grab_full), r.grabNet.toFixed(2),
-        num(rec.lineman_full), r.linemanNet.toFixed(2), r.grossTotal.toFixed(2),
-        r.netTotal.toFixed(2), r.rangeMin.toFixed(2), r.rangeMax.toFixed(2),
-        r.statusKey==="ok"?"ถูกต้อง":r.statusKey==="low"?"ยอดน้อย":"ยอดมาก", rec.id
-    ];
-    // ส่งแบบ no-cors เพื่อความรวดเร็วและเลี่ยงปัญหาข้ามโดเมน
-    return fetch(SHEETS_WEBAPP_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: editingId ? "update" : "append", id: rec.id, row })
-    });
+const r = rec.result;
+const row = [rec.date, rec.staff, r.mSold, r.lSold, r.bSold, r.cSold, r.totalCups, num(rec.pay_qr), num(rec.pay_cash), num(rec.grab_full), r.grabNet.toFixed(2), num(rec.lineman_full), r.linemanNet.toFixed(2), r.grossTotal.toFixed(2), r.netTotal.toFixed(2), r.rangeMin.toFixed(2), r.rangeMax.toFixed(2), r.statusKey==="ok"?"ถูกต้อง":r.statusKey==="low"?"ยอดน้อย":"ยอดมาก", rec.id];
+return fetch(SHEETS_WEBAPP_URL, {
+  method:"POST",
+  mode: "no-cors",
+  headers:{"Content-Type":"application/json"},
+  body: JSON.stringify({ action: editingId ? "update" : "append", id: rec.id, row })
+});
+}
+
+window.deleteRecord = async function(id) {
+if (!confirm("ลบข้อมูลนี้ใช่ไหม?")) return;
+await remove(ref(db,"records/"+id));
+fetch(SHEETS_WEBAPP_URL, {method:"POST", mode: "no-cors", headers:{"Content-Type":"application/json"},
+body: JSON.stringify({action:"delete", id})}).catch(()=>{});
+};
+
+window.editRecord = function(id) {
+const rec = allRecords[id]; if (!rec) return;
+editingId = id;
+g("f-date").value=rec.date; g("f-staff").value=rec.staff||"";
+["m","l","b","c"].forEach(k=>{
+g(k+"-prev").value=rec[k+"_prev"]||"0";
+g(k+"-add").value=rec[k+"_add"]||"0";
+g(k+"-left").value=rec[k+"_left"]||"0";
+calcSold(k);
+});
+g("pay-qr").value=rec.pay_qr||"0"; g("pay-cash").value=rec.pay_cash||"0";
+g("grab-full").value=rec.grab_full||"0"; calcGrabNet();
+g("lineman-full").value=rec.lineman_full||"0"; calcLinemanNet();
+if(rec.result){lastResult=rec.result;renderResult(rec.result)}
+switchTab("check");
+};
+
+function clearForm(){
+editingId=null; lastResult=null;
+["f-staff","m-prev","m-add","m-left","l-prev","l-add","l-left","b-prev","b-add","b-left","c-prev","c-add","c-left","pay-qr","pay-cash","grab-full","lineman-full"]
+.forEach(id=>{if(g(id))g(id).value=""});
+g("f-date").value=todayStr();
+["m","l","b","c"].forEach(k=>{if(g(k+"-sold"))g(k+"-sold").textContent="0"});
+g("result-box").style.display="none";
+g("btn-save").disabled=false;
 }
 
 // ════════════════════════════════════════════════════════
-// ANALYSIS DASHBOARD (วิเคราะห์ยอดขาย)
+// ANALYSIS DASHBOARD (NEW!)
 // ════════════════════════════════════════════════════════
-window.updateAnalysis = function() {
-    const recs = Object.values(allRecords);
-    if (!recs.length) return;
+function updateAnalysis() {
+  const recs = Object.values(allRecords);
+  if (recs.length === 0) return;
 
-    const totalNet = recs.reduce((sum, r) => sum + (r.result?.netTotal || 0), 0);
-    const totalCups = recs.reduce((sum, r) => sum + (r.result?.totalCups || 0), 0);
-    const avgPerDay = totalNet / recs.length;
+  const totalNet = recs.reduce((s, r) => s + (r.result?.netTotal || 0), 0);
+  const totalCups = recs.reduce((s, r) => s + (r.result?.totalCups || 0), 0);
+  const qrSum = recs.reduce((s, r) => s + num(r.pay_qr), 0);
+  const cashSum = recs.reduce((s, r) => s + num(r.pay_cash), 0);
+  const appSum = recs.reduce((s, r) => s + (r.result?.grabNet || 0) + (r.result?.linemanNet || 0), 0);
 
-    g("ana-total-net").textContent = fmt(totalNet) + " ฿";
-    g("ana-total-cups").textContent = totalCups + " รายการ";
-    g("ana-avg").textContent = fmt(avgPerDay) + " ฿";
-    
-    const qrSum = recs.reduce((sum, r) => sum + num(r.pay_qr), 0);
-    const cashSum = recs.reduce((sum, r) => sum + num(r.pay_cash), 0);
-    const delivSum = recs.reduce((sum, r) => sum + (r.result?.grabNet || 0) + (r.result?.linemanNet || 0), 0);
-    const grand = qrSum + cashSum + delivSum;
+  g("ana-net").textContent = fmt(totalNet) + " ฿";
+  g("ana-cups").textContent = totalCups.toLocaleString() + " แก้ว";
+  g("ana-days").textContent = recs.length + " วัน";
+  
+  // Progress bar logic
+  const max = Math.max(qrSum, cashSum, appSum, 1);
+  g("bar-qr").style.width = (qrSum/totalNet*100) + "%";
+  g("bar-cash").style.width = (cashSum/totalNet*100) + "%";
+  g("bar-app").style.width = (appSum/totalNet*100) + "%";
+}
 
-    g("bar-qr").style.width = (qrSum/grand*100) + "%";
-    g("bar-cash").style.width = (cashSum/grand*100) + "%";
-    g("bar-deliv").style.width = (delivSum/grand*100) + "%";
+// ════════════════════════════════════════════════════════
+// TAB & HISTORY
+// ════════════════════════════════════════════════════════
+function renderHistory(){
+const q=(g("search-q")?.value||"").toLowerCase();
+const recs=Object.values(allRecords).sort((a,b)=>b.date.localeCompare(a.date));
+const list=recs.filter(r=>r.date?.includes(q)||r.staff?.toLowerCase().includes(q));
+const container=g("history-list"); if(!container)return;
+if(!recs.length){
+container.innerHTML=`<div class="empty">📭 ยังไม่มีข้อมูล</div>`; return;
+}
+container.innerHTML=list.map(rec=>{
+const r=rec.result||{};
+return `<div class="h-card" style="border-left-color:${r.statusColor}">
+<div class="h-head" onclick="toggleCard('${rec.id}')">
+  <div><div class="h-date">${rec.date}</div><div class="h-staff">${rec.staff}</div></div>
+  <div style="text-align:right"><div class="h-gross">${fmt(r.netTotal)} ฿</div><div class="h-sub">${r.totalCups} รายการ</div></div>
+</div>
+<div class="h-body" id="hbody-${rec.id}" style="display:none">
+  <div class="h-grid">
+    <span>ยอด QR/เงินสด</span><span>${fmt(num(rec.pay_qr)+num(rec.pay_cash))} ฿</span>
+    <span>ยอด App (สุทธิ)</span><span>${fmt((r.grabNet||0)+(r.linemanNet||0))} ฿</span>
+  </div>
+  <div class="h-btns">
+    <button class="btn-ed" onclick="editRecord('${rec.id}')">✏️ แก้ไข</button>
+    <button class="btn-del" onclick="deleteRecord('${rec.id}')">🗑️ ลบ</button>
+  </div>
+</div>
+</div>`;
+}).join("");
+}
+
+window.toggleCard = function(id){
+const body=g("hbody-"+id); body.style.display=body.style.display==="none"?"block":"none";
 };
 
-// ... (History Render & Tab Switch เดิม) ...
-window.renderHistory = function() {
-    const q = (g("search-q")?.value || "").toLowerCase();
-    const list = Object.values(allRecords).sort((a,b)=>b.date.localeCompare(a.date))
-                 .filter(r => r.date.includes(q) || r.staff.toLowerCase().includes(q));
-    
-    g("history-list").innerHTML = list.map(rec => `
-        <div class="h-card" style="border-left-color:${rec.result.statusColor}">
-            <div class="h-head" onclick="toggleCard('${rec.id}')">
-                <div><b>${rec.date}</b><br><small>${rec.staff}</small></div>
-                <div style="text-align:right"><b>${fmt(rec.result.netTotal)} ฿</b><br><small>${rec.result.totalCups} แก้ว</small></div>
-            </div>
-            <div id="hbody-${rec.id}" style="display:none; padding:10px; border-top:1px solid #eee">
-                <button class="btn-del" onclick="deleteRecord('${rec.id}')" style="width:100%">🗑️ ลบข้อมูล</button>
-            </div>
-        </div>
-    `).join("");
+window.switchTab = function(t){
+g("page-check").style.display=t==="check"?"block":"none";
+g("page-history").style.display=t==="history"?"block":"none";
+g("tab-check").classList.toggle("active",t==="check");
+g("tab-history").classList.toggle("active",t==="history");
+if(t==="history") { renderHistory(); updateAnalysis(); }
 };
 
-window.toggleCard = id => {
-    const b = g("hbody-"+id);
-    b.style.display = b.style.display === "none" ? "block" : "none";
-};
-
-window.deleteRecord = async (id) => {
-    if(confirm("ยืนยันการลบ?")) {
-        await remove(ref(db, "records/"+id));
-        fetch(SHEETS_WEBAPP_URL, { method: "POST", mode: "no-cors", body: JSON.stringify({action:"delete", id}) });
-    }
-};
-
-window.clearForm = () => {
-    editingId=null; lastResult=null;
-    g("result-box").style.display="none";
-    location.reload(); // รีโหลดเพื่อล้างค่าทั้งหมด
-};
-
-window.switchTab = t => {
-    g("page-check").style.display = t==="check" ? "block" : "none";
-    g("page-history").style.display = t==="history" ? "block" : "none";
-    g("tab-check").classList.toggle("active", t==="check");
-    g("tab-history").classList.toggle("active", t==="history");
-    if(t==="history") updateAnalysis();
-};
-
-window.onload = () => {
-    g("f-date").value = todayStr();
-    initFirebase();
-};
+window.addEventListener("load",()=>{
+g("f-date").value=todayStr();
+initFirebase();
+});
 </script>
 
 <style>
-/* CSS ปรับปรุงใหม่ */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{min-height:100vh;background:#fff8f0;font-family:'Sarabun',sans-serif;font-size:15px;color:#1c1917}
 .wrap{max-width:700px;margin:0 auto;padding:16px 12px 60px}
-.header{background:linear-gradient(135deg,#f97316,#ea580c);border-radius:20px;padding:20px 20px 0;margin-bottom:10px;box-shadow:0 8px 24px #f9731640}
+.header{background:linear-gradient(135deg,#f97316,#ea580c);border-radius:20px;padding:20px 20px 0;margin-bottom:10px}
 .logo-row{display:flex;align-items:center;gap:12px;margin-bottom:16px;color:#fff}
+.logo-icon{font-size:44px}
 .tabs{display:flex;gap:4px}
-.tab{flex:1;padding:12px 0;border-radius:10px 10px 0 0;border:none;cursor:pointer;background:#c2410c44;color:#fed7aa;font-weight:600}
+.tab{flex:1;padding:10px 0;border-radius:10px 10px 0 0;border:none;cursor:pointer;font-weight:600;background:#c2410c44;color:#fed7aa}
 .tab.active{background:#fff8f0;color:#f97316}
-#conn-status{font-size:12px;border-radius:10px;padding:7px 12px;margin-bottom:8px;font-weight:600;text-align:center}
+#conn-status{font-size:12px;border-radius:10px;padding:7px 12px;margin-bottom:8px;border:1px solid;font-weight:600}
 .card{background:#fff;border-radius:16px;padding:16px;box-shadow:0 2px 8px #0000000a;border:1px solid #e7e5e4;margin-bottom:12px}
 .card-title{font-size:15px;font-weight:700;color:#f97316;margin-bottom:12px}
-.vcol{display:flex;flex-direction:column;gap:10px}
-.field label{font-size:12px;color:#78716c;font-weight:600;display:block;margin-bottom:4px}
-input{padding:10px;border-radius:10px;border:1.5px solid #e7e5e4;width:100%;font-family:inherit}
-.stock-row{margin-bottom:15px}
-.stock-line{display:flex;align-items:flex-end;gap:5px}
+.field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+.fld-lbl{font-size:12px;color:#78716c;font-weight:600}
+input{padding:9px 12px;border-radius:10px;border:1.5px solid #e7e5e4;width:100%;font-family:inherit}
 .inp-sm{text-align:center;font-weight:700}
-.sold-box{background:#fff7ed;border:2px solid #fed7aa;border-radius:10px;padding:5px;text-align:center;min-width:60px}
+.stock-row{margin-bottom:14px}
+.stock-line{display:flex;align-items:flex-end;gap:4px}
+.sold-box{background:#fff7ed;border:2px solid #fed7aa;border-radius:10px;padding:4px 10px;text-align:center;min-width:60px}
 .sold-num{font-size:20px;font-weight:800;color:#f97316}
-.btn-calc{background:#f97316;color:#fff;border:none;border-radius:12px;padding:15px;width:100%;font-weight:700;font-size:16px;cursor:pointer;margin:10px 0}
-.btn-save{display:block;width:100%;background:#1c1917;color:#fff;border:none;border-radius:12px;padding:15px;font-weight:700;cursor:pointer;margin-top:10px}
+.btn-calc{background:#f97316;color:#fff;border:none;border-radius:12px;padding:13px 44px;font-weight:700;cursor:pointer;width:100%}
+.btn-save{display:block;width:calc(100% - 24px);margin:10px 12px;color:#fff;border:none;border-radius:12px;padding:13px;font-weight:700;cursor:pointer}
 .res-box{background:#fff;border-radius:16px;border:2px solid;overflow:hidden;margin-bottom:12px;display:none}
-.res-banner{color:#fff;padding:10px;font-weight:800;text-align:center}
-.res-body{padding:15px}
-.res-row{display:flex;justify-content:space-between;margin-bottom:5px}
-.divider{height:1px;background:#eee;margin:10px 0}
+.res-banner{color:#fff;padding:12px;font-weight:800;text-align:center}
+.res-body{padding:14px}
+.res-row{display:flex;justify-content:space-between;margin-bottom:4px}
 .bold{font-weight:700}
 .accent{color:#f97316}
-.analysis-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:15px}
-.ana-card{background:#fff;padding:10px;border-radius:12px;border:1px solid #e7e5e4;text-align:center}
-.ana-val{font-size:15px;font-weight:800;color:#f97316;display:block}
-.ana-lbl{font-size:10px;color:#78716c}
-.pay-bar{height:10px;border-radius:5px;display:flex;overflow:hidden;background:#eee;margin:10px 0}
-.h-card{background:#fff;border-radius:12px;margin-bottom:8px;border-left:5px solid}
-.h-head{padding:12px;display:flex;justify-content:space-between;cursor:pointer}
-.btn-del{background:#fff5f5;color:#ef4444;border:1px solid #fecaca;padding:8px;border-radius:8px;cursor:pointer}
-.auto-tag{font-size:12px;color:#065f46;background:#d1fae5;padding:8px;border-radius:8px;margin-bottom:10px;display:none;border:1px solid #6ee7b7}
+
+/* ANALYSIS STYLES */
+.ana-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:15px}
+.ana-item{background:#fff7ed;padding:10px;border-radius:12px;text-align:center;border:1px solid #fed7aa}
+.ana-label{font-size:11px;color:#78716c;display:block}
+.ana-val{font-size:15px;font-weight:800;color:#c2410c}
+.ana-chart{margin-top:10px}
+.ana-bar-wrap{height:12px;background:#e7e5e4;border-radius:6px;display:flex;overflow:hidden;margin:8px 0}
+.ana-bar{height:100%;transition:width 0.5s}
+.legend{display:flex;justify-content:space-between;font-size:11px;font-weight:600}
+
+.h-card{background:#fff;border-radius:14px;border:1px solid #e7e5e4;margin-bottom:8px;border-left:5px solid}
+.h-head{display:flex;justify-content:space-between;padding:12px;cursor:pointer}
+.h-date{font-weight:700}
+.h-staff{font-size:12px;color:#78716c}
+.h-gross{font-weight:800;color:#f97316}
+.h-body{padding:12px;border-top:1px solid #eee}
+.h-btns{display:flex;gap:8px;margin-top:10px}
+.btn-ed, .btn-del{flex:1;padding:8px;border-radius:8px;border:1px solid #ddd;cursor:pointer;font-family:inherit}
+.btn-del{color:red;border-color:#fecaca}
+.search-inp{margin-bottom:10px}
+.auto-tag{background:#d1fae5;color:#065f46;padding:8px;border-radius:8px;font-size:12px;margin-bottom:10px;display:none}
 </style>
 </head>
 <body>
 <div class="wrap">
-    <div class="header">
-        <div class="logo-row">
-            <div style="font-size:40px">🍧</div>
-            <div><div style="font-weight:800;font-size:20px">บิงซูตู้ส้ม</div><div style="font-size:12px;opacity:0.8">ระบบเช็คยอดและวิเคราะห์อัตโนมัติ</div></div>
-        </div>
-        <div class="tabs">
-            <button class="tab active" id="tab-check" onclick="switchTab('check')">📋 บันทึกขาย</button>
-            <button class="tab" id="tab-history" onclick="switchTab('history')">📊 ผลประกอบการ</button>
-        </div>
+
+<div class="header">
+<div class="logo-row">
+<div class="logo-icon">🍧</div>
+<div><div style="font-size:22px;font-weight:800">บิงซูตู้ส้ม</div><div style="font-size:12px;opacity:0.8">ระบบจัดการยอดขาย & Sheets Sync</div></div>
+</div>
+<div class="tabs">
+<button class="tab active" id="tab-check" onclick="switchTab('check')">📋 กรอกข้อมูล</button>
+<button class="tab" id="tab-history" onclick="switchTab('history')">📊 ประวัติ & วิเคราะห์</button>
+</div>
+</div>
+
+<div id="conn-status" style="background:#fff7ed;color:#92400e;border-color:#fde68a">⏳ กำลังเชื่อมต่อ...</div>
+
+<div id="page-check">
+<div class="card">
+<div class="card-title">📅 ข้อมูลทั่วไป</div>
+<div class="field"><label class="fld-lbl">วันที่</label><input type="date" id="f-date" onchange="onDateChange()"></div>
+<div class="field"><label class="fld-lbl">ชื่อพนักงาน</label><input type="text" id="f-staff" placeholder="ระบุชื่อ"></div>
+</div>
+
+<div class="card">
+<div class="card-title">🍧 สต็อคและจำนวนขาย</div>
+<div id="auto-tag" class="auto-tag"></div>
+<div class="stock-row"><div class="fld-lbl">Size M</div><div class="stock-line">
+<input type="number" class="inp-sm" id="m-prev" placeholder="ก่อน" oninput="calcSold('m')">
+<span>+</span>
+<input type="number" class="inp-sm" id="m-add" placeholder="เติม" oninput="calcSold('m')">
+<span>-</span>
+<input type="number" class="inp-sm" id="m-left" placeholder="เหลือ" oninput="calcSold('m')">
+<div class="sold-box"><div class="sold-num" id="m-sold">0</div></div>
+</div></div>
+<div class="stock-row"><div class="fld-lbl">Size L</div><div class="stock-line">
+<input type="number" class="inp-sm" id="l-prev" placeholder="ก่อน" oninput="calcSold('l')">
+<span>+</span>
+<input type="number" class="inp-sm" id="l-add" placeholder="เติม" oninput="calcSold('l')">
+<span>-</span>
+<input type="number" class="inp-sm" id="l-left" placeholder="เหลือ" oninput="calcSold('l')">
+<div class="sold-box"><div class="sold-num" id="l-sold">0</div></div>
+</div></div>
+<div class="stock-row"><div class="fld-lbl">บานาน่า สปริท</div><div class="stock-line">
+<input type="number" class="inp-sm" id="b-prev" placeholder="ก่อน" oninput="calcSold('b')">
+<span>+</span>
+<input type="number" class="inp-sm" id="b-add" placeholder="เติม" oninput="calcSold('b')">
+<span>-</span>
+<input type="number" class="inp-sm" id="b-left" placeholder="เหลือ" oninput="calcSold('b')">
+<div class="sold-box"><div class="sold-num" id="b-sold">0</div></div>
+</div></div>
+<div class="stock-row"><div class="fld-lbl">ครีมชีสไข่มุก</div><div class="stock-line">
+<input type="number" class="inp-sm" id="c-prev" placeholder="ก่อน" oninput="calcSold('c')">
+<span>+</span>
+<input type="number" class="inp-sm" id="c-add" placeholder="เติม" oninput="calcSold('c')">
+<span>-</span>
+<input type="number" class="inp-sm" id="c-left" placeholder="เหลือ" oninput="calcSold('c')">
+<div class="sold-box"><div class="sold-num" id="c-sold">0</div></div>
+</div></div>
+</div>
+
+<div class="card">
+<div class="card-title">💰 ยอดเงินที่ได้รับ</div>
+<div class="field"><label class="fld-lbl">💳 หน้าร้าน (QR)</label><input type="number" id="pay-qr" placeholder="0.00"></div>
+<div class="field"><label class="fld-lbl">💵 หน้าร้าน (เงินสด)</label><input type="number" id="pay-cash" placeholder="0.00"></div>
+<div class="field"><label class="fld-lbl">🚗 Grab (ยอดเต็ม)</label><input type="number" id="grab-full" placeholder="0.00" oninput="calcGrabNet()"></div>
+<div class="field"><label class="fld-lbl">🟢 LINE MAN (ยอดเต็ม)</label><input type="number" id="lineman-full" placeholder="0.00" oninput="calcLinemanNet()"></div>
+</div>
+
+<div style="padding:0 12px"><button class="btn-calc" onclick="doCalc()">📊 คำนวณยอด</button></div>
+
+<div id="result-box" class="res-box">
+  <div id="res-banner" class="res-banner"></div>
+  <div id="res-body" class="res-body"></div>
+  <button id="btn-save" class="btn-save" onclick="doSave()">💾 บันทึกข้อมูลไป Sheets</button>
+</div>
+</div>
+
+<div id="page-history" style="display:none">
+  <div class="card" style="background:#fffcf5; border-color:#f97316">
+    <div class="card-title">📈 วิเคราะห์ยอดขายสะสม</div>
+    <div class="ana-grid">
+      <div class="ana-item"><span class="ana-label">รายได้สุทธิ</span><div class="ana-val" id="ana-net">0 ฿</div></div>
+      <div class="ana-item"><span class="ana-label">จำนวนขาย</span><div class="ana-val" id="ana-cups">0 แก้ว</div></div>
+      <div class="ana-item"><span class="ana-label">รวมข้อมูล</span><div class="ana-val" id="ana-days">0 วัน</div></div>
     </div>
-
-    <div id="conn-status">⏳ กำลังเชื่อมต่อ...</div>
-
-    <div id="page-check">
-        <div class="card">
-            <div class="card-title">📅 ข้อมูลทั่วไป</div>
-            <div class="vcol">
-                <div class="field"><label>วันที่</label><input type="date" id="f-date" onchange="tryAutoFill(this.value)"></div>
-                <div class="field"><label>ชื่อพนักงาน</label><input type="text" id="f-staff" placeholder="ระบุชื่อ"></div>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="card-title">🍧 สต็อคและยอดขาย</div>
-            <div id="auto-tag" class="auto-tag"></div>
-            
-            <script>
-                const items = [
-                    {id:'m', name:'Size M (55-69฿)'},
-                    {id:'l', name:'Size L (79-99฿)'},
-                    {id:'b', name:'บานาน่า สปริท (65฿)'},
-                    {id:'c', name:'ครีมชีสไข่มุก (39฿)'}
-                ];
-                items.forEach(it => {
-                    document.write(`
-                        <div class="stock-row">
-                            <div style="font-size:13px; font-weight:700; margin-bottom:5px">${it.name}</div>
-                            <div class="stock-line">
-                                <div class="field"><label>วันก่อน</label><input type="number" id="${it.id}-prev" class="inp-sm" oninput="calcSold('${it.id}')"></div>
-                                <div style="padding-bottom:10px">+</div>
-                                <div class="field"><label>เติม</label><input type="number" id="${it.id}-add" class="inp-sm" oninput="calcSold('${it.id}')"></div>
-                                <div style="padding-bottom:10px">-</div>
-                                <div class="field"><label>เหลือ</label><input type="number" id="${it.id}-left" class="inp-sm" oninput="calcSold('${it.id}')"></div>
-                                <div style="padding-bottom:10px">=</div>
-                                <div class="sold-box"><div class="sold-num" id="${it.id}-sold">0</div><div style="font-size:9px">ขาย</div></div>
-                            </div>
-                        </div>
-                    `);
-                });
-            </script>
-        </div>
-
-        <div class="card">
-            <div class="card-title">💰 ยอดเงินหน้าร้านและเดลิเวอรี</div>
-            <div class="vcol">
-                <div class="field"><label>💳 QR Code (บาท)</label><input type="number" id="pay-qr"></div>
-                <div class="field"><label>💵 เงินสด (บาท)</label><input type="number" id="pay-cash"></div>
-                <div class="field"><label>🚗 Grab (ยอดเต็ม)</label><input type="number" id="grab-full"></div>
-                <div class="field"><label>🟢 Line Man (ยอดเต็ม)</label><input type="number" id="lineman-full"></div>
-            </div>
-            <button class="btn-calc" onclick="doCalc()">📊 คำนวณยอด</button>
-        </div>
-
-        <div id="result-box" class="res-box">
-            <div id="res-banner" class="res-banner"></div>
-            <div id="res-body" class="res-body"></div>
-        </div>
-        
-        <button id="btn-save" class="btn-save" onclick="doSave()">💾 บันทึกและส่งข้อมูลไป Google Sheets</button>
+    <div class="ana-chart">
+      <div class="legend"><span>QR</span><span>เงินสด</span><span>App (สุทธิ)</span></div>
+      <div class="ana-bar-wrap">
+        <div id="bar-qr" class="ana-bar" style="background:#3b82f6; width:0%"></div>
+        <div id="bar-cash" class="ana-bar" style="background:#10b981; width:0%"></div>
+        <div id="bar-app" class="ana-bar" style="background:#f59e0b; width:0%"></div>
+      </div>
+      <div style="font-size:10px; color:#999; text-align:center">สัดส่วนช่องทางการรับเงิน</div>
     </div>
+  </div>
 
-    <div id="page-history" style="display:none">
-        <div class="card" style="background: #fffaf5; border-color: #fed7aa;">
-            <div class="card-title">📈 วิเคราะห์ยอดขายรวม</div>
-            <div class="analysis-grid">
-                <div class="ana-card"><span class="ana-lbl">รายได้สุทธิ</span><span class="ana-val" id="ana-total-net">0 ฿</span></div>
-                <div class="ana-card"><span class="ana-lbl">รวมขายได้</span><span class="ana-val" id="ana-total-cups">0</span></div>
-                <div class="ana-card"><span class="ana-lbl">เฉลี่ยต่อวัน</span><span class="ana-val" id="ana-avg">0 ฿</span></div>
-            </div>
-            <div style="font-size:11px; margin-bottom:5px">สัดส่วนช่องทาง: <span style="color:#2563eb">QR</span> / <span style="color:#16a34a">เงินสด</span> / <span style="color:#ea580c">Delivery</span></div>
-            <div class="pay-bar">
-                <div id="bar-qr" style="background:#2563eb; width:0%"></div>
-                <div id="bar-cash" style="background:#16a34a; width:0%"></div>
-                <div id="bar-deliv" style="background:#ea580c; width:0%"></div>
-            </div>
-        </div>
-        
-        <input type="text" id="search-q" class="search-inp" placeholder="🔍 ค้นหาวันที่หรือชื่อพนักงาน..." oninput="renderHistory()" style="margin-bottom:10px">
-        <div id="history-list"></div>
-    </div>
+  <input type="text" id="search-q" class="search-inp" placeholder="🔍 ค้นหาวันที่/ชื่อพนักงาน..." oninput="renderHistory()">
+  <div id="history-list"></div>
+</div>
+
 </div>
 </body>
 </html>
