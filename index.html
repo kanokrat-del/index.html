@@ -5,465 +5,607 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>🍧 บิงซูตู้ส้ม — ระบบเช็คยอดขาย</title>
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;800&display=swap" rel="stylesheet">
-
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getDatabase, ref, push, set, remove, onValue, get }
-from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
-
-// ════════════════════════════════════════════════════════
-// 🔧 ตั้งค่า Firebase
-// ════════════════════════════════════════════════════════
-const firebaseConfig = {
-apiKey: "AIzaSyC0IZc90rgTTxJdJRhYcO85Gf5D7FcW3nU",
-authDomain: "bingsutusom-99fa0.firebaseapp.com",
-databaseURL: "https://bingsutusom-99fa0-default-rtdb.asia-southeast1.firebasedatabase.app",
-projectId: "bingsutusom-99fa0",
-storageBucket: "bingsutusom-99fa0.firebasestorage.app",
-messagingSenderId: "1068089490766",
-appId: "1:1068089490766:web:ea0ed4c707e6187b37b21f",
-measurementId: "G-G52DVFE9XM"
-};
-
-// 🔧 Google Sheets Web App URL - ใส่ให้เรียบร้อยแล้ว
-const SHEETS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbw7Jh91nyN21QkhpeXFEbkXN6QlTFki5PPxdZKPe1GuLRMdzXhr-aR5SROiAmvwTQP9dA/exec";
-
-// ════════════════════════════════════════════════════════
-const PRICE_M_MIN=55,PRICE_M_MAX=69,PRICE_L_MIN=79,PRICE_L_MAX=99;
-const PRICE_BANANA=65,PRICE_CREAM=39,MAX_TOPPING=45,GP=0.34;
-
-let app, db, recordsRef;
-let allRecords = {};
-let editingId = null;
-let lastResult = null;
-let isConfigured = false;
-
-function checkConfig() {
-  return firebaseConfig.apiKey && firebaseConfig.apiKey !== "YOUR_API_KEY";
-}
-
-function initFirebase() {
-try {
-app = initializeApp(firebaseConfig);
-db = getDatabase(app);
-recordsRef = ref(db, "records");
-onValue(recordsRef, (snapshot) => {
-  allRecords = snapshot.val() || {};
-  renderHistory();
-  updateAnalysis(); // อัปเดตการวิเคราะห์ทุกครั้งที่ข้อมูลเปลี่ยน
-  if (!editingId) {
-    setTimeout(() => tryAutoFill(g("f-date").value), 100);
-  }
-});
-showStatus("🟢 เชื่อมต่อ Firebase และ Sheets แล้ว", "ok");
-isConfigured = true;
-g("setup-banner").style.display = "none";
-} catch(e) {
-showStatus("🔴 Firebase Error: " + e.message, "err");
-}
-}
-
-// ════════════════════════════════════════════════════════
-// UTILS
-// ════════════════════════════════════════════════════════
-const fmt = n => isNaN(n) ? "0.00" : parseFloat(n).toLocaleString("th-TH",{minimumFractionDigits:2,maximumFractionDigits:2});
-const num = v => parseFloat(v) || 0;
-const todayStr = () => new Date().toISOString().split("T")[0];
-const soldQty = (p,a,l) => Math.max(0, num(p)+num(a)-num(l));
-const g = id => document.getElementById(id);
-const val = id => g(id)?.value || "";
-
-function showStatus(msg, type) {
-const el = g("conn-status");
-el.textContent = msg;
-el.style.background = type==="ok" ? "#d1fae5" : type==="err" ? "#fee2e2" : "#fff7ed";
-el.style.color = type==="ok" ? "#065f46" : type==="err" ? "#991b1b" : "#92400e";
-el.style.borderColor = type==="ok" ? "#6ee7b7" : type==="err" ? "#fca5a5" : "#fde68a";
-}
-
-// ════════════════════════════════════════════════════════
-// FORM & CALCULATION
-// ════════════════════════════════════════════════════════
-window.onDateChange = function() {
-if (editingId) return;
-tryAutoFill(val("f-date"));
-};
-
-function tryAutoFill(date) {
-  if (!date || editingId) return; 
-  const recs = Object.values(allRecords);
-  if (recs.length === 0) return;
-  const pastRecords = recs.filter(r => r.date < date).sort((a, b) => b.date.localeCompare(a.date));
-  const found = pastRecords[0];
-  if (found) {
-    g("m-prev").value = found.m_left ?? "0";
-    g("l-prev").value = found.l_left ?? "0";
-    g("b-prev").value = found.b_left ?? "0";
-    g("c-prev").value = found.c_left ?? "0";
-    ["m","l","b","c"].forEach(calcSold);
-    g("auto-tag").style.display = "block";
-    g("auto-tag").innerHTML = `✨ ดึงยอดคงเหลือจากวันที่ ${found.date} มาให้แล้ว`;
-  } else {
-    g("auto-tag").style.display = "none";
-  }
-}
-
-window.calcSold = function(k) {
-const s = soldQty(val(k+"-prev"), val(k+"-add"), val(k+"-left"));
-g(k+"-sold").textContent = s;
-lastResult = null;
-};
-window.calcGrabNet = function() { g("grab-net").textContent = fmt(num(val("grab-full"))*(1-GP))+" ฿"; };
-window.calcLinemanNet = function() { g("lineman-net").textContent = fmt(num(val("lineman-full"))*(1-GP))+" ฿"; };
-
-window.doCalc = function() {
-const mSold=soldQty(val("m-prev"),val("m-add"),val("m-left"));
-const lSold=soldQty(val("l-prev"),val("l-add"),val("l-left"));
-const bSold=soldQty(val("b-prev"),val("b-add"),val("b-left"));
-const cSold=soldQty(val("c-prev"),val("c-add"),val("c-left"));
-const totalCups=mSold+lSold+bSold+cSold;
-const minExp=mSold*PRICE_M_MIN+lSold*PRICE_L_MIN+bSold*PRICE_BANANA+cSold*PRICE_CREAM;
-const maxExp=mSold*PRICE_M_MAX+lSold*PRICE_L_MAX+bSold*PRICE_BANANA+cSold*PRICE_CREAM;
-const rangeMin=minExp, rangeMax=maxExp+totalCups*MAX_TOPPING;
-const qr=num(val("pay-qr")), cash=num(val("pay-cash"));
-const grabFull=num(val("grab-full")), linemanFull=num(val("lineman-full"));
-const grabNet=grabFull*(1-GP), linemanNet=linemanFull*(1-GP);
-const grossTotal=qr+cash+grabFull+linemanFull;
-const netTotal=qr+cash+grabNet+linemanNet;
-let statusKey, statusColor;
-if (totalCups===0){statusKey="nodata";statusColor="#94a3b8"}
-else if (grossTotal<rangeMin){statusKey="low";statusColor="#ef4444"}
-else if (grossTotal>rangeMax){statusKey="high";statusColor="#f97316"}
-else {statusKey="ok";statusColor="#22c55e"}
-lastResult={mSold,lSold,bSold,cSold,totalCups,minExp,maxExp,rangeMin,rangeMax,qr,cash,grabFull,linemanFull,grabNet,linemanNet,grossTotal,netTotal,statusKey,statusColor};
-renderResult(lastResult);
-};
-
-function renderResult(r) {
-const box=g("result-box"); box.style.display="block"; box.style.borderColor=r.statusColor;
-const banner=g("res-banner"); banner.style.background=r.statusColor;
-const S={
-ok:{icon:"✅",title:"ยอดถูกต้อง!",desc:`ยอดเงิน ${fmt(r.grossTotal)} ฿ อยู่ในช่วงที่เป็นไปได้`},
-low:{icon:"❌",title:"ยอดเงินน้อยกว่าที่ควร",desc:`ยอดเงิน ${fmt(r.grossTotal)} ฿ ต่ำกว่าขั้นต่ำ ${fmt(r.rangeMin)} ฿`},
-high:{icon:"⚠️",title:"ยอดเงินมากกว่าที่ควร",desc:`ยอดเงิน ${fmt(r.grossTotal)} ฿ เกินช่วงสูงสุด ${fmt(r.rangeMax)} ฿`},
-nodata:{icon:"ℹ️",title:"ยังไม่มีข้อมูล",desc:"กรุณากรอกข้อมูลก่อน"},
-};
-const st=S[r.statusKey];
-banner.textContent=st.icon+" "+st.title;
-const row=(l,v,cls="")=>`<div class="res-row ${cls}"><span class="lbl">${l}</span><span class="val">${v}</span></div>`;
-let h=`<div class="res-msg">${st.desc}</div><div class="divider"></div>`;
-h+=row("รวมขายทั้งหมด",r.totalCups+" รายการ","bold");
-h+=row("ยอดรวม Gross",fmt(r.grossTotal)+" ฿","bold accent");
-h+=row("รวมสุทธิร้านได้รับ",fmt(r.netTotal)+" ฿","bold");
-g("res-body").innerHTML=h;
-const btn=g("btn-save");
-btn.style.background=r.statusKey==="ok"?"#1c1917":r.statusColor;
-btn.textContent=editingId?"💾 อัปเดตข้อมูล":"💾 บันทึกข้อมูลไป Sheets";
-}
-
-// ════════════════════════════════════════════════════════
-// SAVE & SYNC
-// ════════════════════════════════════════════════════════
-window.doSave = async function() {
-if (!lastResult){alert("กรุณากดคำนวณก่อนบันทึก");return}
-if (!val("f-staff").trim()){alert("กรุณากรอกชื่อพนักงาน");return}
-const btn=g("btn-save");
-btn.textContent="⏳ กำลังบันทึก..."; btn.disabled=true;
-const rec = {
-id: editingId || Date.now().toString(),
-date: val("f-date"), staff: val("f-staff").trim(),
-m_prev:val("m-prev"),m_add:val("m-add"),m_left:val("m-left"),
-l_prev:val("l-prev"),l_add:val("l-add"),l_left:val("l-left"),
-b_prev:val("b-prev"),b_add:val("b-add"),b_left:val("b-left"),
-c_prev:val("c-prev"),c_add:val("c-add"),c_left:val("c-left"),
-pay_qr:val("pay-qr"), pay_cash:val("pay-cash"),
-grab_full:val("grab-full"), lineman_full:val("lineman-full"),
-savedAt: new Date().toISOString(),
-result: lastResult
-};
-try {
-await set(ref(db, "records/"+rec.id), rec);
-await pushToSheets(rec);
-btn.textContent = "✅ บันทึกสำเร็จ!";
-setTimeout(() => { clearForm(); switchTab('history'); }, 1000);
-} catch(e) {
-alert("เกิดข้อผิดพลาด: "+e.message);
-btn.disabled = false;
-}
-};
-
-async function pushToSheets(rec) {
-const r = rec.result;
-const row = [rec.date, rec.staff, r.mSold, r.lSold, r.bSold, r.cSold, r.totalCups, num(rec.pay_qr), num(rec.pay_cash), num(rec.grab_full), r.grabNet.toFixed(2), num(rec.lineman_full), r.linemanNet.toFixed(2), r.grossTotal.toFixed(2), r.netTotal.toFixed(2), r.rangeMin.toFixed(2), r.rangeMax.toFixed(2), r.statusKey==="ok"?"ถูกต้อง":r.statusKey==="low"?"ยอดน้อย":"ยอดมาก", rec.id];
-return fetch(SHEETS_WEBAPP_URL, {
-  method:"POST",
-  mode: "no-cors",
-  headers:{"Content-Type":"application/json"},
-  body: JSON.stringify({ action: editingId ? "update" : "append", id: rec.id, row })
-});
-}
-
-window.deleteRecord = async function(id) {
-if (!confirm("ลบข้อมูลนี้ใช่ไหม?")) return;
-await remove(ref(db,"records/"+id));
-fetch(SHEETS_WEBAPP_URL, {method:"POST", mode: "no-cors", headers:{"Content-Type":"application/json"},
-body: JSON.stringify({action:"delete", id})}).catch(()=>{});
-};
-
-window.editRecord = function(id) {
-const rec = allRecords[id]; if (!rec) return;
-editingId = id;
-g("f-date").value=rec.date; g("f-staff").value=rec.staff||"";
-["m","l","b","c"].forEach(k=>{
-g(k+"-prev").value=rec[k+"_prev"]||"0";
-g(k+"-add").value=rec[k+"_add"]||"0";
-g(k+"-left").value=rec[k+"_left"]||"0";
-calcSold(k);
-});
-g("pay-qr").value=rec.pay_qr||"0"; g("pay-cash").value=rec.pay_cash||"0";
-g("grab-full").value=rec.grab_full||"0"; calcGrabNet();
-g("lineman-full").value=rec.lineman_full||"0"; calcLinemanNet();
-if(rec.result){lastResult=rec.result;renderResult(rec.result)}
-switchTab("check");
-};
-
-function clearForm(){
-editingId=null; lastResult=null;
-["f-staff","m-prev","m-add","m-left","l-prev","l-add","l-left","b-prev","b-add","b-left","c-prev","c-add","c-left","pay-qr","pay-cash","grab-full","lineman-full"]
-.forEach(id=>{if(g(id))g(id).value=""});
-g("f-date").value=todayStr();
-["m","l","b","c"].forEach(k=>{if(g(k+"-sold"))g(k+"-sold").textContent="0"});
-g("result-box").style.display="none";
-g("btn-save").disabled=false;
-}
-
-// ════════════════════════════════════════════════════════
-// ANALYSIS DASHBOARD (NEW!)
-// ════════════════════════════════════════════════════════
-function updateAnalysis() {
-  const recs = Object.values(allRecords);
-  if (recs.length === 0) return;
-
-  const totalNet = recs.reduce((s, r) => s + (r.result?.netTotal || 0), 0);
-  const totalCups = recs.reduce((s, r) => s + (r.result?.totalCups || 0), 0);
-  const qrSum = recs.reduce((s, r) => s + num(r.pay_qr), 0);
-  const cashSum = recs.reduce((s, r) => s + num(r.pay_cash), 0);
-  const appSum = recs.reduce((s, r) => s + (r.result?.grabNet || 0) + (r.result?.linemanNet || 0), 0);
-
-  g("ana-net").textContent = fmt(totalNet) + " ฿";
-  g("ana-cups").textContent = totalCups.toLocaleString() + " แก้ว";
-  g("ana-days").textContent = recs.length + " วัน";
-  
-  // Progress bar logic
-  const max = Math.max(qrSum, cashSum, appSum, 1);
-  g("bar-qr").style.width = (qrSum/totalNet*100) + "%";
-  g("bar-cash").style.width = (cashSum/totalNet*100) + "%";
-  g("bar-app").style.width = (appSum/totalNet*100) + "%";
-}
-
-// ════════════════════════════════════════════════════════
-// TAB & HISTORY
-// ════════════════════════════════════════════════════════
-function renderHistory(){
-const q=(g("search-q")?.value||"").toLowerCase();
-const recs=Object.values(allRecords).sort((a,b)=>b.date.localeCompare(a.date));
-const list=recs.filter(r=>r.date?.includes(q)||r.staff?.toLowerCase().includes(q));
-const container=g("history-list"); if(!container)return;
-if(!recs.length){
-container.innerHTML=`<div class="empty">📭 ยังไม่มีข้อมูล</div>`; return;
-}
-container.innerHTML=list.map(rec=>{
-const r=rec.result||{};
-return `<div class="h-card" style="border-left-color:${r.statusColor}">
-<div class="h-head" onclick="toggleCard('${rec.id}')">
-  <div><div class="h-date">${rec.date}</div><div class="h-staff">${rec.staff}</div></div>
-  <div style="text-align:right"><div class="h-gross">${fmt(r.netTotal)} ฿</div><div class="h-sub">${r.totalCups} รายการ</div></div>
-</div>
-<div class="h-body" id="hbody-${rec.id}" style="display:none">
-  <div class="h-grid">
-    <span>ยอด QR/เงินสด</span><span>${fmt(num(rec.pay_qr)+num(rec.pay_cash))} ฿</span>
-    <span>ยอด App (สุทธิ)</span><span>${fmt((r.grabNet||0)+(r.linemanNet||0))} ฿</span>
-  </div>
-  <div class="h-btns">
-    <button class="btn-ed" onclick="editRecord('${rec.id}')">✏️ แก้ไข</button>
-    <button class="btn-del" onclick="deleteRecord('${rec.id}')">🗑️ ลบ</button>
-  </div>
-</div>
-</div>`;
-}).join("");
-}
-
-window.toggleCard = function(id){
-const body=g("hbody-"+id); body.style.display=body.style.display==="none"?"block":"none";
-};
-
-window.switchTab = function(t){
-g("page-check").style.display=t==="check"?"block":"none";
-g("page-history").style.display=t==="history"?"block":"none";
-g("tab-check").classList.toggle("active",t==="check");
-g("tab-history").classList.toggle("active",t==="history");
-if(t==="history") { renderHistory(); updateAnalysis(); }
-};
-
-window.addEventListener("load",()=>{
-g("f-date").value=todayStr();
-initFirebase();
-});
-</script>
-
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{min-height:100vh;background:#fff8f0;font-family:'Sarabun',sans-serif;font-size:15px;color:#1c1917}
-.wrap{max-width:700px;margin:0 auto;padding:16px 12px 60px}
-.header{background:linear-gradient(135deg,#f97316,#ea580c);border-radius:20px;padding:20px 20px 0;margin-bottom:10px}
-.logo-row{display:flex;align-items:center;gap:12px;margin-bottom:16px;color:#fff}
-.logo-icon{font-size:44px}
+body::before{content:'';position:fixed;inset:0;background:radial-gradient(circle at 80% 10%,#fed7aa33,transparent 50%),radial-gradient(circle at 10% 90%,#fde68a22,transparent 50%);pointer-events:none;z-index:0}
+.wrap{max-width:700px;margin:0 auto;padding:16px 12px 80px;position:relative;z-index:1}
+.header{background:linear-gradient(135deg,#f97316,#ea580c);border-radius:20px;padding:20px 20px 0;margin-bottom:10px;box-shadow:0 8px 24px #f9731640}
+.logo-row{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.logo-icon{font-size:44px;filter:drop-shadow(0 2px 6px #0004)}
+.logo-title{color:#fff;font-size:22px;font-weight:800}
+.logo-sub{color:#fed7aa;font-size:12px}
+.badge{margin-left:auto;background:#ffffff25;color:#fff;border-radius:20px;padding:4px 12px;font-size:12px;font-weight:700;border:1px solid #ffffff30}
 .tabs{display:flex;gap:4px}
-.tab{flex:1;padding:10px 0;border-radius:10px 10px 0 0;border:none;cursor:pointer;font-weight:600;background:#c2410c44;color:#fed7aa}
+.tab{flex:1;padding:10px 0;border-radius:10px 10px 0 0;border:none;cursor:pointer;font-size:12px;font-weight:600;background:#c2410c44;color:#fed7aa;font-family:inherit;transition:all .2s}
 .tab.active{background:#fff8f0;color:#f97316}
-#conn-status{font-size:12px;border-radius:10px;padding:7px 12px;margin-bottom:8px;border:1px solid;font-weight:600}
-.card{background:#fff;border-radius:16px;padding:16px;box-shadow:0 2px 8px #0000000a;border:1px solid #e7e5e4;margin-bottom:12px}
+#conn-status{font-size:12px;border-radius:10px;padding:7px 12px;margin-bottom:8px;border:1px solid;font-weight:600;transition:all .3s}
+.hint{font-size:12px;color:#c2410c;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:6px 10px;margin-bottom:8px}
+.auto-tag{font-size:12px;color:#065f46;background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:6px 10px;margin-bottom:12px;display:none}
+.card{background:#fff;border-radius:16px;padding:16px 16px 14px;box-shadow:0 2px 8px #0000000a;border:1px solid #e7e5e4;margin-bottom:12px}
 .card-title{font-size:15px;font-weight:700;color:#f97316;margin-bottom:12px}
-.field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+.field{display:flex;flex-direction:column;gap:4px}
 .fld-lbl{font-size:12px;color:#78716c;font-weight:600}
-input{padding:9px 12px;border-radius:10px;border:1.5px solid #e7e5e4;width:100%;font-family:inherit}
-.inp-sm{text-align:center;font-weight:700}
+input[type=text],input[type=date],input[type=number]{padding:9px 12px;border-radius:10px;border:1.5px solid #e7e5e4;font-size:14px;background:#fafaf9;outline:none;font-family:inherit;width:100%;transition:border .2s}
+input:focus{border-color:#f97316}
+.inp-sm{padding:8px 6px;border-radius:8px;border:1.5px solid #e7e5e4;font-size:15px;background:#fafaf9;text-align:center;font-weight:700;font-family:inherit;width:100%}
+.calc-out{padding:9px 12px;border-radius:10px;border:1.5px solid #d1fae5;font-size:14px;background:#f0fdf4;font-weight:700;color:#166534}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.vcol{display:flex;flex-direction:column;gap:10px}
 .stock-row{margin-bottom:14px}
+.stock-label{font-size:13px;font-weight:700;color:#1c1917;margin-bottom:6px}
 .stock-line{display:flex;align-items:flex-end;gap:4px}
-.sold-box{background:#fff7ed;border:2px solid #fed7aa;border-radius:10px;padding:4px 10px;text-align:center;min-width:60px}
-.sold-num{font-size:20px;font-weight:800;color:#f97316}
-.btn-calc{background:#f97316;color:#fff;border:none;border-radius:12px;padding:13px 44px;font-weight:700;cursor:pointer;width:100%}
-.btn-save{display:block;width:calc(100% - 24px);margin:10px 12px;color:#fff;border:none;border-radius:12px;padding:13px;font-weight:700;cursor:pointer}
-.res-box{background:#fff;border-radius:16px;border:2px solid;overflow:hidden;margin-bottom:12px;display:none}
-.res-banner{color:#fff;padding:12px;font-weight:800;text-align:center}
-.res-body{padding:14px}
-.res-row{display:flex;justify-content:space-between;margin-bottom:4px}
-.bold{font-weight:700}
-.accent{color:#f97316}
-
-/* ANALYSIS STYLES */
-.ana-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:15px}
-.ana-item{background:#fff7ed;padding:10px;border-radius:12px;text-align:center;border:1px solid #fed7aa}
-.ana-label{font-size:11px;color:#78716c;display:block}
-.ana-val{font-size:15px;font-weight:800;color:#c2410c}
-.ana-chart{margin-top:10px}
-.ana-bar-wrap{height:12px;background:#e7e5e4;border-radius:6px;display:flex;overflow:hidden;margin:8px 0}
-.ana-bar{height:100%;transition:width 0.5s}
-.legend{display:flex;justify-content:space-between;font-size:11px;font-weight:600}
-
-.h-card{background:#fff;border-radius:14px;border:1px solid #e7e5e4;margin-bottom:8px;border-left:5px solid}
-.h-head{display:flex;justify-content:space-between;padding:12px;cursor:pointer}
-.h-date{font-weight:700}
-.h-staff{font-size:12px;color:#78716c}
-.h-gross{font-weight:800;color:#f97316}
-.h-body{padding:12px;border-top:1px solid #eee}
-.h-btns{display:flex;gap:8px;margin-top:10px}
-.btn-ed, .btn-del{flex:1;padding:8px;border-radius:8px;border:1px solid #ddd;cursor:pointer;font-family:inherit}
-.btn-del{color:red;border-color:#fecaca}
-.search-inp{margin-bottom:10px}
-.auto-tag{background:#d1fae5;color:#065f46;padding:8px;border-radius:8px;font-size:12px;margin-bottom:10px;display:none}
+.op{font-size:18px;font-weight:700;color:#78716c;padding-bottom:8px;flex-shrink:0}
+.sold-box{background:#fff7ed;border:2px solid #fed7aa;border-radius:10px;padding:4px 10px;text-align:center;flex-shrink:0;min-width:48px}
+.sold-num{font-size:20px;font-weight:800;color:#f97316;line-height:1}
+.sold-lbl{font-size:10px;color:#78716c}
+.pay-label{font-size:13px;font-weight:700;color:#1c1917;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.gp-badge{font-size:11px;background:#fef3c7;color:#92400e;border-radius:6px;padding:1px 7px;font-weight:700}
+.deliv-block{padding-top:10px;border-top:1px solid #e7e5e4;margin-bottom:14px}
+.center{display:flex;justify-content:center;margin-bottom:12px}
+.btn-calc{background:#f97316;color:#fff;border:none;border-radius:12px;padding:13px 44px;font-size:16px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px #f9731650;font-family:inherit}
+.btn-save{display:block;width:calc(100% - 32px);margin:0 16px 16px;color:#fff;border:none;border-radius:12px;padding:13px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .2s}
+.res-box{background:#fff;border-radius:16px;border:2px solid;overflow:hidden;box-shadow:0 4px 16px #0000001a;margin-bottom:12px;display:none}
+.res-banner{color:#fff;padding:13px 20px;font-size:17px;font-weight:800}
+.res-body{padding:14px 16px;display:flex;flex-direction:column;gap:5px}
+.res-msg{font-size:13px;color:#1c1917;background:#f5f5f4;border-radius:8px;padding:8px 12px;line-height:1.5}
+.res-sub{font-size:12px;font-weight:700;color:#78716c;margin-top:4px}
+.res-row{display:flex;justify-content:space-between;align-items:center}
+.res-row .lbl{font-size:13px;color:#78716c}
+.res-row .val{font-size:14px;color:#1c1917}
+.res-row.bold .lbl,.res-row.bold .val{font-weight:700}
+.res-row.accent .val{color:#f97316}
+.res-row.muted .lbl,.res-row.muted .val{color:#a8a29e}
+.divider{height:1px;background:#e7e5e4;margin:4px 0}
+.search-inp{padding:9px 12px;border-radius:10px;border:1.5px solid #e7e5e4;font-size:14px;background:#fafaf9;outline:none;font-family:inherit;width:100%;margin-bottom:8px}
+.record-count{font-size:12px;color:#78716c;text-align:right;margin-bottom:8px}
+.h-card{background:#fff;border-radius:14px;border:1px solid #e7e5e4;overflow:hidden;box-shadow:0 2px 8px #0000000a;margin-bottom:8px;border-left:4px solid}
+.h-head{display:flex;justify-content:space-between;align-items:flex-start;padding:14px 16px;cursor:pointer}
+.h-date{font-size:16px;font-weight:700;color:#1c1917}
+.h-staff{font-size:13px;color:#78716c;margin-top:2px}
+.h-status{font-size:12px;font-weight:700;margin-bottom:2px}
+.h-gross{font-size:18px;font-weight:800;color:#f97316}
+.h-sub{font-size:12px;color:#78716c}
+.h-body{border-top:1px solid #e7e5e4;padding:12px 16px}
+.h-grid{display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:13px;margin-bottom:10px;color:#78716c}
+.h-btns{display:flex;gap:8px}
+.btn-ed{flex:1;padding:8px;border-radius:8px;border:1.5px solid #e7e5e4;background:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+.btn-del{flex:1;padding:8px;border-radius:8px;border:1.5px solid #fecaca;background:#fff5f5;color:#ef4444;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+.empty{background:#fff;border-radius:16px;padding:48px 20px;text-align:center;color:#78716c;font-size:16px;border:1px solid #e7e5e4}
+.sheets-badge{display:flex;align-items:center;gap:8px;background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#166534;font-weight:600}
+.sheets-link{margin-left:auto;background:#16a34a;color:#fff;border-radius:8px;padding:5px 12px;font-size:12px;font-weight:700;text-decoration:none}
+.period-row{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.period-btn{padding:7px 14px;border-radius:20px;border:1.5px solid #e7e5e4;background:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;color:#78716c;transition:all .2s}
+.period-btn.active{background:#f97316;border-color:#f97316;color:#fff}
+.kpi-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.kpi-card{background:#fff;border-radius:14px;padding:14px;border:1px solid #e7e5e4;box-shadow:0 2px 8px #0000000a}
+.kpi-label{font-size:11px;color:#78716c;font-weight:700;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
+.kpi-value{font-size:20px;font-weight:800;color:#1c1917;line-height:1.1}
+.kpi-value.orange{color:#f97316}
+.chart-card{background:#fff;border-radius:16px;padding:16px;border:1px solid #e7e5e4;box-shadow:0 2px 8px #0000000a;margin-bottom:12px}
+.chart-title{font-size:14px;font-weight:700;color:#1c1917;margin-bottom:12px}
+.chart-wrap{position:relative;height:200px}
+.chart-wrap.tall{height:240px}
+.charts-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.staff-card{background:#fff;border-radius:16px;padding:16px;border:1px solid #e7e5e4;box-shadow:0 2px 8px #0000000a;margin-bottom:12px}
+.staff-title{font-size:14px;font-weight:700;color:#1c1917;margin-bottom:10px}
+table.staff-tbl{width:100%;border-collapse:collapse;font-size:13px}
+table.staff-tbl th{text-align:left;color:#78716c;font-weight:700;font-size:11px;padding:4px 6px;border-bottom:1.5px solid #e7e5e4}
+table.staff-tbl td{padding:8px 6px;border-bottom:1px solid #f5f5f4;color:#1c1917}
+table.staff-tbl tr:last-child td{border-bottom:none}
+#analytics-empty{background:#fff;border-radius:16px;padding:48px 20px;text-align:center;color:#78716c;font-size:16px;border:1px solid #e7e5e4;display:none}
 </style>
 </head>
 <body>
 <div class="wrap">
 
 <div class="header">
-<div class="logo-row">
-<div class="logo-icon">🍧</div>
-<div><div style="font-size:22px;font-weight:800">บิงซูตู้ส้ม</div><div style="font-size:12px;opacity:0.8">ระบบจัดการยอดขาย & Sheets Sync</div></div>
-</div>
-<div class="tabs">
-<button class="tab active" id="tab-check" onclick="switchTab('check')">📋 กรอกข้อมูล</button>
-<button class="tab" id="tab-history" onclick="switchTab('history')">📊 ประวัติ & วิเคราะห์</button>
-</div>
+  <div class="logo-row">
+    <div class="logo-icon">🍧</div>
+    <div><div class="logo-title">บิงซูตู้ส้ม</div><div class="logo-sub">ระบบเช็คยอดขายและสต็อค · Firebase + Sheets</div></div>
+    <div class="badge">🔥 Cloud</div>
+  </div>
+  <div class="tabs">
+    <button class="tab active" id="tab-check" data-tab="check">📋 กรอกข้อมูล</button>
+    <button class="tab" id="tab-history" data-tab="history">📋 ประวัติ</button>
+    <button class="tab" id="tab-analytics" data-tab="analytics">📊 วิเคราะห์</button>
+  </div>
 </div>
 
 <div id="conn-status" style="background:#fff7ed;color:#92400e;border-color:#fde68a">⏳ กำลังเชื่อมต่อ...</div>
 
+<!-- TAB: กรอกข้อมูล -->
 <div id="page-check">
-<div class="card">
-<div class="card-title">📅 ข้อมูลทั่วไป</div>
-<div class="field"><label class="fld-lbl">วันที่</label><input type="date" id="f-date" onchange="onDateChange()"></div>
-<div class="field"><label class="fld-lbl">ชื่อพนักงาน</label><input type="text" id="f-staff" placeholder="ระบุชื่อ"></div>
-</div>
-
-<div class="card">
-<div class="card-title">🍧 สต็อคและจำนวนขาย</div>
-<div id="auto-tag" class="auto-tag"></div>
-<div class="stock-row"><div class="fld-lbl">Size M</div><div class="stock-line">
-<input type="number" class="inp-sm" id="m-prev" placeholder="ก่อน" oninput="calcSold('m')">
-<span>+</span>
-<input type="number" class="inp-sm" id="m-add" placeholder="เติม" oninput="calcSold('m')">
-<span>-</span>
-<input type="number" class="inp-sm" id="m-left" placeholder="เหลือ" oninput="calcSold('m')">
-<div class="sold-box"><div class="sold-num" id="m-sold">0</div></div>
-</div></div>
-<div class="stock-row"><div class="fld-lbl">Size L</div><div class="stock-line">
-<input type="number" class="inp-sm" id="l-prev" placeholder="ก่อน" oninput="calcSold('l')">
-<span>+</span>
-<input type="number" class="inp-sm" id="l-add" placeholder="เติม" oninput="calcSold('l')">
-<span>-</span>
-<input type="number" class="inp-sm" id="l-left" placeholder="เหลือ" oninput="calcSold('l')">
-<div class="sold-box"><div class="sold-num" id="l-sold">0</div></div>
-</div></div>
-<div class="stock-row"><div class="fld-lbl">บานาน่า สปริท</div><div class="stock-line">
-<input type="number" class="inp-sm" id="b-prev" placeholder="ก่อน" oninput="calcSold('b')">
-<span>+</span>
-<input type="number" class="inp-sm" id="b-add" placeholder="เติม" oninput="calcSold('b')">
-<span>-</span>
-<input type="number" class="inp-sm" id="b-left" placeholder="เหลือ" oninput="calcSold('b')">
-<div class="sold-box"><div class="sold-num" id="b-sold">0</div></div>
-</div></div>
-<div class="stock-row"><div class="fld-lbl">ครีมชีสไข่มุก</div><div class="stock-line">
-<input type="number" class="inp-sm" id="c-prev" placeholder="ก่อน" oninput="calcSold('c')">
-<span>+</span>
-<input type="number" class="inp-sm" id="c-add" placeholder="เติม" oninput="calcSold('c')">
-<span>-</span>
-<input type="number" class="inp-sm" id="c-left" placeholder="เหลือ" oninput="calcSold('c')">
-<div class="sold-box"><div class="sold-num" id="c-sold">0</div></div>
-</div></div>
-</div>
-
-<div class="card">
-<div class="card-title">💰 ยอดเงินที่ได้รับ</div>
-<div class="field"><label class="fld-lbl">💳 หน้าร้าน (QR)</label><input type="number" id="pay-qr" placeholder="0.00"></div>
-<div class="field"><label class="fld-lbl">💵 หน้าร้าน (เงินสด)</label><input type="number" id="pay-cash" placeholder="0.00"></div>
-<div class="field"><label class="fld-lbl">🚗 Grab (ยอดเต็ม)</label><input type="number" id="grab-full" placeholder="0.00" oninput="calcGrabNet()"></div>
-<div class="field"><label class="fld-lbl">🟢 LINE MAN (ยอดเต็ม)</label><input type="number" id="lineman-full" placeholder="0.00" oninput="calcLinemanNet()"></div>
-</div>
-
-<div style="padding:0 12px"><button class="btn-calc" onclick="doCalc()">📊 คำนวณยอด</button></div>
-
-<div id="result-box" class="res-box">
-  <div id="res-banner" class="res-banner"></div>
-  <div id="res-body" class="res-body"></div>
-  <button id="btn-save" class="btn-save" onclick="doSave()">💾 บันทึกข้อมูลไป Sheets</button>
-</div>
-</div>
-
-<div id="page-history" style="display:none">
-  <div class="card" style="background:#fffcf5; border-color:#f97316">
-    <div class="card-title">📈 วิเคราะห์ยอดขายสะสม</div>
-    <div class="ana-grid">
-      <div class="ana-item"><span class="ana-label">รายได้สุทธิ</span><div class="ana-val" id="ana-net">0 ฿</div></div>
-      <div class="ana-item"><span class="ana-label">จำนวนขาย</span><div class="ana-val" id="ana-cups">0 แก้ว</div></div>
-      <div class="ana-item"><span class="ana-label">รวมข้อมูล</span><div class="ana-val" id="ana-days">0 วัน</div></div>
-    </div>
-    <div class="ana-chart">
-      <div class="legend"><span>QR</span><span>เงินสด</span><span>App (สุทธิ)</span></div>
-      <div class="ana-bar-wrap">
-        <div id="bar-qr" class="ana-bar" style="background:#3b82f6; width:0%"></div>
-        <div id="bar-cash" class="ana-bar" style="background:#10b981; width:0%"></div>
-        <div id="bar-app" class="ana-bar" style="background:#f59e0b; width:0%"></div>
-      </div>
-      <div style="font-size:10px; color:#999; text-align:center">สัดส่วนช่องทางการรับเงิน</div>
+  <div class="card">
+    <div class="card-title">📅 ข้อมูลทั่วไป</div>
+    <div class="vcol">
+      <div class="field"><label class="fld-lbl">วันที่</label><input type="date" id="f-date"></div>
+      <div class="field"><label class="fld-lbl">ชื่อพนักงาน</label><input type="text" id="f-staff" placeholder="ชื่อพนักงาน"></div>
     </div>
   </div>
+  <div class="card">
+    <div class="card-title">🍧 จำนวนแก้ว / จาน</div>
+    <div class="hint">💡 จำนวนขาย = (วันก่อน + เติมเพิ่ม) − คงเหลือ</div>
+    <div class="auto-tag" id="auto-tag"></div>
+    <div class="stock-row"><div class="stock-label">Size M</div><div class="stock-line">
+      <div class="field"><label class="fld-lbl">วันก่อน</label><input type="number" min="0" placeholder="0" class="inp-sm" id="m-prev" data-sold="m"></div>
+      <span class="op">+</span>
+      <div class="field"><label class="fld-lbl">เติมเพิ่ม</label><input type="number" min="0" placeholder="0" class="inp-sm" id="m-add" data-sold="m"></div>
+      <span class="op">−</span>
+      <div class="field"><label class="fld-lbl">คงเหลือ</label><input type="number" min="0" placeholder="0" class="inp-sm" id="m-left" data-sold="m"></div>
+      <span class="op">=</span>
+      <div class="sold-box"><div class="sold-num" id="m-sold">0</div><div class="sold-lbl">แก้ว</div></div>
+    </div></div>
+    <div class="stock-row"><div class="stock-label">Size L</div><div class="stock-line">
+      <div class="field"><label class="fld-lbl">วันก่อน</label><input type="number" min="0" placeholder="0" class="inp-sm" id="l-prev" data-sold="l"></div>
+      <span class="op">+</span>
+      <div class="field"><label class="fld-lbl">เติมเพิ่ม</label><input type="number" min="0" placeholder="0" class="inp-sm" id="l-add" data-sold="l"></div>
+      <span class="op">−</span>
+      <div class="field"><label class="fld-lbl">คงเหลือ</label><input type="number" min="0" placeholder="0" class="inp-sm" id="l-left" data-sold="l"></div>
+      <span class="op">=</span>
+      <div class="sold-box"><div class="sold-num" id="l-sold">0</div><div class="sold-lbl">แก้ว</div></div>
+    </div></div>
+    <div class="stock-row"><div class="stock-label">จานกระดาษ (บานาน่า สปริท)</div><div class="stock-line">
+      <div class="field"><label class="fld-lbl">วันก่อน</label><input type="number" min="0" placeholder="0" class="inp-sm" id="b-prev" data-sold="b"></div>
+      <span class="op">+</span>
+      <div class="field"><label class="fld-lbl">เติมเพิ่ม</label><input type="number" min="0" placeholder="0" class="inp-sm" id="b-add" data-sold="b"></div>
+      <span class="op">−</span>
+      <div class="field"><label class="fld-lbl">คงเหลือ</label><input type="number" min="0" placeholder="0" class="inp-sm" id="b-left" data-sold="b"></div>
+      <span class="op">=</span>
+      <div class="sold-box"><div class="sold-num" id="b-sold">0</div><div class="sold-lbl">จาน</div></div>
+    </div></div>
+    <div class="stock-row"><div class="stock-label">Size S (ครีมชีสไข่มุก)</div><div class="stock-line">
+      <div class="field"><label class="fld-lbl">วันก่อน</label><input type="number" min="0" placeholder="0" class="inp-sm" id="c-prev" data-sold="c"></div>
+      <span class="op">+</span>
+      <div class="field"><label class="fld-lbl">เติมเพิ่ม</label><input type="number" min="0" placeholder="0" class="inp-sm" id="c-add" data-sold="c"></div>
+      <span class="op">−</span>
+      <div class="field"><label class="fld-lbl">คงเหลือ</label><input type="number" min="0" placeholder="0" class="inp-sm" id="c-left" data-sold="c"></div>
+      <span class="op">=</span>
+      <div class="sold-box"><div class="sold-num" id="c-sold">0</div><div class="sold-lbl">แก้ว</div></div>
+    </div></div>
+  </div>
+  <div class="card">
+    <div class="card-title">💰 ยอดเงินที่ได้รับ</div>
+    <div style="margin-bottom:14px">
+      <div class="pay-label">ยอดหน้าร้าน</div>
+      <div class="g2">
+        <div class="field"><label class="fld-lbl">💳 เงินโอน QR (บาท)</label><input type="number" min="0" placeholder="0" id="pay-qr"></div>
+        <div class="field"><label class="fld-lbl">💵 เงินสด (บาท)</label><input type="number" min="0" placeholder="0" id="pay-cash"></div>
+      </div>
+    </div>
+    <div class="deliv-block">
+      <div class="pay-label">🚗 Grab <span class="gp-badge">GP 34%</span></div>
+      <div class="g2">
+        <div class="field"><label class="fld-lbl">ราคาเต็ม (ก่อนหัก GP)</label><input type="number" min="0" placeholder="0" id="grab-full"></div>
+        <div class="field"><label class="fld-lbl">ร้านได้รับจริง</label><div class="calc-out" id="grab-net">0.00 ฿</div></div>
+      </div>
+    </div>
+    <div class="deliv-block">
+      <div class="pay-label">🟢 LINE MAN <span class="gp-badge">GP 34%</span></div>
+      <div class="g2">
+        <div class="field"><label class="fld-lbl">ราคาเต็ม (ก่อนหัก GP)</label><input type="number" min="0" placeholder="0" id="lineman-full"></div>
+        <div class="field"><label class="fld-lbl">ร้านได้รับจริง</label><div class="calc-out" id="lineman-net">0.00 ฿</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="center"><button class="btn-calc" id="btn-calc">🔍 คำนวณตรวจสอบ</button></div>
+  <div class="res-box" id="result-box">
+    <div class="res-banner" id="res-banner"></div>
+    <div class="res-body" id="res-body"></div>
+    <button class="btn-save" id="btn-save">💾 บันทึก + ส่งข้อมูลไป Google Sheets</button>
+  </div>
+</div>
 
-  <input type="text" id="search-q" class="search-inp" placeholder="🔍 ค้นหาวันที่/ชื่อพนักงาน..." oninput="renderHistory()">
+<!-- TAB: ประวัติ -->
+<div id="page-history" style="display:none">
+  <div class="sheets-badge">
+    📋 <span>Google Sheets อัปเดตอัตโนมัติทุกครั้งที่บันทึก</span>
+    <a class="sheets-link" href="https://docs.google.com/spreadsheets/d/1GWXY9IHpmt-th89wehCj46QlAs4scgn1qJFQVS3j9AA/edit" target="_blank">เปิด Sheet →</a>
+  </div>
+  <input type="text" class="search-inp" id="search-q" placeholder="🔍 ค้นหาวันที่หรือชื่อพนักงาน">
+  <div class="record-count" id="record-count"></div>
   <div id="history-list"></div>
 </div>
 
+<!-- TAB: วิเคราะห์ -->
+<div id="page-analytics" style="display:none">
+  <div class="period-row">
+    <button class="period-btn active" data-period="7">7 วัน</button>
+    <button class="period-btn" data-period="30">30 วัน</button>
+    <button class="period-btn" data-period="90">3 เดือน</button>
+    <button class="period-btn" data-period="all">ทั้งหมด</button>
+  </div>
+  <div id="analytics-empty"><div style="font-size:48px">📊</div><div style="margin-top:8px">ยังไม่มีข้อมูลในช่วงเวลานี้</div><div style="font-size:13px;opacity:.5;margin-top:4px">บันทึกข้อมูลในแท็บ "กรอกข้อมูล" ก่อน</div></div>
+  <div id="analytics-content" style="display:none">
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="kpi-label">💰 ยอดสุทธิรวม</div><div class="kpi-value orange" id="kpi-net">-</div></div>
+      <div class="kpi-card"><div class="kpi-label">📅 เฉลี่ย/วัน</div><div class="kpi-value" id="kpi-avg">-</div></div>
+      <div class="kpi-card"><div class="kpi-label">🍧 แก้ว/จานรวม</div><div class="kpi-value" id="kpi-cups">-</div></div>
+      <div class="kpi-card"><div class="kpi-label">✅ วันที่ยอดถูก</div><div class="kpi-value" id="kpi-ok">-</div></div>
+      <div class="kpi-card"><div class="kpi-label">📆 วันที่บันทึก</div><div class="kpi-value" id="kpi-days">-</div></div>
+      <div class="kpi-card"><div class="kpi-label">🏆 วันขายดีสุด</div><div class="kpi-value" style="font-size:13px;font-weight:700;color:#f97316;line-height:1.4" id="kpi-best">-</div></div>
+    </div>
+    <div class="chart-card"><div class="chart-title">📈 ยอดขายรายวัน</div><div class="chart-wrap tall"><canvas id="chart-revenue"></canvas></div></div>
+    <div class="charts-row">
+      <div class="chart-card" style="margin-bottom:0"><div class="chart-title">🍧 สัดส่วนสินค้า</div><div class="chart-wrap"><canvas id="chart-items"></canvas></div></div>
+      <div class="chart-card" style="margin-bottom:0"><div class="chart-title">📊 สถานะยอดขาย</div><div class="chart-wrap"><canvas id="chart-status"></canvas></div></div>
+    </div>
+    <div class="staff-card" style="margin-top:12px">
+      <div class="staff-title">👤 สรุปตามพนักงาน</div>
+      <table class="staff-tbl"><thead><tr><th>ชื่อ</th><th style="text-align:center">วัน</th><th style="text-align:right">ยอดสุทธิรวม</th><th style="text-align:right">เฉลี่ย/วัน</th></tr></thead><tbody id="staff-table"></tbody></table>
+    </div>
+  </div>
 </div>
+
+</div><!-- /wrap -->
+
+<!-- ====== FIREBASE SDK (module) ====== -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getDatabase, ref, set, remove, onValue }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyC0IZc90rgTTxJdJRhYcO85Gf5D7FcW3nU",
+  authDomain: "bingsutusom-99fa0.firebaseapp.com",
+  databaseURL: "https://bingsutusom-99fa0-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "bingsutusom-99fa0",
+  storageBucket: "bingsutusom-99fa0.firebasestorage.app",
+  messagingSenderId: "1068089490766",
+  appId: "1:1068089490766:web:ea0ed4c707e6187b37b21f"
+};
+const SHEETS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbw7Jh91nyN21QkhpeXFEbkXN6QlTFki5PPxdZKPe1GuLRMdzXhr-aR5SROiAmvwTQP9dA/exec";
+
+const PRICE_M_MIN=55,PRICE_M_MAX=69,PRICE_L_MIN=79,PRICE_L_MAX=99;
+const PRICE_BANANA=65,PRICE_CREAM=39,MAX_TOPPING=45,GP=0.34;
+
+let db, allRecords={}, editingId=null, lastResult=null;
+let chartRevenue=null, chartItems=null, chartStatus=null;
+let currentPeriod = "7";
+
+const fmt = n => isNaN(n)?"0.00":parseFloat(n).toLocaleString("th-TH",{minimumFractionDigits:2,maximumFractionDigits:2});
+const num = v => parseFloat(v)||0;
+const todayStr = () => new Date().toISOString().split("T")[0];
+const soldQty = (p,a,l) => Math.max(0,num(p)+num(a)-num(l));
+const g = id => document.getElementById(id);
+const val = id => g(id)?.value||"";
+
+function showStatus(msg,type){
+  const el=g("conn-status");
+  el.textContent=msg;
+  el.style.background=type==="ok"?"#d1fae5":type==="err"?"#fee2e2":"#fff7ed";
+  el.style.color=type==="ok"?"#065f46":type==="err"?"#991b1b":"#92400e";
+  el.style.borderColor=type==="ok"?"#6ee7b7":type==="err"?"#fca5a5":"#fde68a";
+}
+
+// ── Init
+const app = initializeApp(firebaseConfig);
+db = getDatabase(app);
+onValue(ref(db,"records"),(snapshot)=>{
+  allRecords=snapshot.val()||{};
+  renderHistory();
+  if(document.getElementById("page-analytics").style.display!=="none") renderAnalytics(currentPeriod);
+  if(!editingId) setTimeout(()=>tryAutoFill(val("f-date")),100);
+});
+showStatus("🟢 เชื่อมต่อ Firebase แล้ว","ok");
+
+// ── Auto fill
+function tryAutoFill(date){
+  if(!date||editingId)return;
+  const recs=Object.values(allRecords);
+  if(!recs.length)return;
+  const past=recs.filter(r=>r.date<date).sort((a,b)=>b.date.localeCompare(a.date));
+  const found=past[0];
+  if(found){
+    g("m-prev").value=found.m_left??"0";
+    g("l-prev").value=found.l_left??"0";
+    g("b-prev").value=found.b_left??"0";
+    g("c-prev").value=found.c_left??"0";
+    ["m","l","b","c"].forEach(calcSold);
+    g("auto-tag").style.display="block";
+    g("auto-tag").innerHTML=`✨ <strong>ดึงยอดคงเหลือล่าสุด (จากวันที่ ${found.date})</strong><br>M: <strong>${g("m-prev").value}</strong> | L: <strong>${g("l-prev").value}</strong> | บานาน่า: <strong>${g("b-prev").value}</strong> | ครีมชีส: <strong>${g("c-prev").value}</strong>`;
+  } else {
+    g("auto-tag").style.display="none";
+  }
+}
+
+function calcSold(k){
+  const s=soldQty(val(k+"-prev"),val(k+"-add"),val(k+"-left"));
+  g(k+"-sold").textContent=s;
+  lastResult=null;
+}
+
+// ── Calc
+function doCalc(){
+  const mSold=soldQty(val("m-prev"),val("m-add"),val("m-left"));
+  const lSold=soldQty(val("l-prev"),val("l-add"),val("l-left"));
+  const bSold=soldQty(val("b-prev"),val("b-add"),val("b-left"));
+  const cSold=soldQty(val("c-prev"),val("c-add"),val("c-left"));
+  const totalCups=mSold+lSold+bSold+cSold;
+  const rangeMin=mSold*PRICE_M_MIN+lSold*PRICE_L_MIN+bSold*PRICE_BANANA+cSold*PRICE_CREAM;
+  const rangeMax=(mSold*PRICE_M_MAX+lSold*PRICE_L_MAX+bSold*PRICE_BANANA+cSold*PRICE_CREAM)+totalCups*MAX_TOPPING;
+  const qr=num(val("pay-qr")),cash=num(val("pay-cash"));
+  const grabFull=num(val("grab-full")),linemanFull=num(val("lineman-full"));
+  const grabNet=grabFull*(1-GP),linemanNet=linemanFull*(1-GP);
+  const grossTotal=qr+cash+grabFull+linemanFull;
+  const netTotal=qr+cash+grabNet+linemanNet;
+  let statusKey,statusColor;
+  if(totalCups===0){statusKey="nodata";statusColor="#94a3b8"}
+  else if(grossTotal<rangeMin){statusKey="low";statusColor="#ef4444"}
+  else if(grossTotal>rangeMax){statusKey="high";statusColor="#f97316"}
+  else{statusKey="ok";statusColor="#22c55e"}
+  lastResult={mSold,lSold,bSold,cSold,totalCups,rangeMin,rangeMax,qr,cash,grabFull,linemanFull,grabNet,linemanNet,grossTotal,netTotal,statusKey,statusColor};
+  renderResult(lastResult);
+}
+
+function renderResult(r){
+  const box=g("result-box");box.style.display="block";box.style.borderColor=r.statusColor;
+  const banner=g("res-banner");banner.style.background=r.statusColor;
+  const S={
+    ok:{icon:"✅",title:"ยอดถูกต้อง!",desc:`ยอดเงิน ${fmt(r.grossTotal)} ฿ อยู่ในช่วงที่เป็นไปได้ (${fmt(r.rangeMin)} – ${fmt(r.rangeMax)} ฿)`},
+    low:{icon:"❌",title:"ยอดเงินน้อยกว่าที่ควร",desc:`ยอดเงิน ${fmt(r.grossTotal)} ฿ ต่ำกว่าขั้นต่ำ ${fmt(r.rangeMin)} ฿ อยู่ ${fmt(r.rangeMin-r.grossTotal)} ฿`},
+    high:{icon:"⚠️",title:"ยอดเงินมากกว่าที่ควร",desc:`ยอดเงิน ${fmt(r.grossTotal)} ฿ เกินช่วงสูงสุด ${fmt(r.rangeMax)} ฿`},
+    nodata:{icon:"ℹ️",title:"ยังไม่มีข้อมูล",desc:"กรุณากรอกจำนวนแก้ว/จานก่อนคำนวณ"},
+  };
+  const st=S[r.statusKey];
+  banner.textContent=st.icon+" "+st.title;
+  const row=(l,v,cls="")=>`<div class="res-row ${cls}"><span class="lbl">${l}</span><span class="val">${v}</span></div>`;
+  const div='<div class="divider"></div>';
+  const sub=t=>`<div class="res-sub">${t}</div>`;
+  let h=`<div class="res-msg">${st.desc}</div>${div}`;
+  h+=sub("📦 จำนวนที่ขายได้");
+  h+=row("Size M",r.mSold+" แก้ว")+row("Size L",r.lSold+" แก้ว")+row("จานกระดาษ (บานาน่า สปริท)",r.bSold+" จาน")+row("Size S (ครีมชีสไข่มุก)",r.cSold+" แก้ว")+row("รวมทั้งหมด",r.totalCups+" รายการ","bold");
+  h+=div+sub("💰 เปรียบเทียบยอด");
+  h+=row("ช่วงที่ควรได้",fmt(r.rangeMin)+" – "+fmt(r.rangeMax)+" ฿","muted");
+  h+=row("💳 QR",fmt(r.qr)+" ฿")+row("💵 เงินสด",fmt(r.cash)+" ฿");
+  if(r.grabFull>0)h+=row("🚗 Grab (ก่อนหัก)",fmt(r.grabFull)+" ฿");
+  if(r.linemanFull>0)h+=row("🟢 LINE MAN (ก่อนหัก)",fmt(r.linemanFull)+" ฿");
+  h+=div+row("รวมยอดลูกค้าจ่าย",fmt(r.grossTotal)+" ฿","bold accent");
+  h+=div+sub("💸 ยอดสุทธิที่ร้านได้รับจริง");
+  h+=row("💳+💵 หน้าร้านรวม",fmt(r.qr+r.cash)+" ฿");
+  if(r.grabFull>0)h+=row("🚗 Grab (หัก 34%)",fmt(r.grabNet)+" ฿");
+  if(r.linemanFull>0)h+=row("🟢 LINE MAN (หัก 34%)",fmt(r.linemanNet)+" ฿");
+  h+=row("รวมสุทธิร้านได้รับ",fmt(r.netTotal)+" ฿","bold");
+  g("res-body").innerHTML=h;
+  const btn=g("btn-save");
+  btn.style.background=r.statusKey==="ok"?"#1c1917":r.statusColor;
+  btn.textContent=editingId?"💾 อัปเดตข้อมูล":"💾 บันทึก + ส่งข้อมูลไป Google Sheets";
+}
+
+// ── Save
+async function doSave(){
+  if(!lastResult){alert("กรุณากดคำนวณก่อนบันทึก");return}
+  if(!val("f-staff").trim()){alert("กรุณากรอกชื่อพนักงาน");return}
+  const btn=g("btn-save");
+  btn.textContent="⏳ กำลังบันทึก...";btn.disabled=true;
+  const rec={
+    id:editingId||Date.now().toString(),
+    date:val("f-date"),staff:val("f-staff").trim(),
+    m_prev:val("m-prev"),m_add:val("m-add"),m_left:val("m-left"),
+    l_prev:val("l-prev"),l_add:val("l-add"),l_left:val("l-left"),
+    b_prev:val("b-prev"),b_add:val("b-add"),b_left:val("b-left"),
+    c_prev:val("c-prev"),c_add:val("c-add"),c_left:val("c-left"),
+    pay_qr:val("pay-qr"),pay_cash:val("pay-cash"),
+    grab_full:val("grab-full"),lineman_full:val("lineman-full"),
+    savedAt:new Date().toISOString(),result:lastResult
+  };
+  try{
+    await set(ref(db,"records/"+rec.id),rec);
+    const ok=await pushToSheets(rec);
+    btn.textContent=ok?"✅ บันทึกและส่ง Sheets แล้ว!":"✅ บันทึกแล้ว (Sheets ไม่ตอบสนอง)";
+    setTimeout(()=>clearForm(),1500);
+  }catch(e){
+    alert("เกิดข้อผิดพลาด: "+e.message);
+    btn.textContent=editingId?"💾 อัปเดตข้อมูล":"💾 บันทึก + ส่งข้อมูลไป Google Sheets";
+    btn.disabled=false;
+  }
+}
+
+async function pushToSheets(rec){
+  if(!SHEETS_WEBAPP_URL||SHEETS_WEBAPP_URL==="YOUR_APPS_SCRIPT_WEBAPP_URL")return false;
+  const r=rec.result;
+  const row=[rec.date,rec.staff,r.mSold,r.lSold,r.bSold,r.cSold,r.totalCups,num(rec.pay_qr),num(rec.pay_cash),num(rec.grab_full),r.grabNet.toFixed(2),num(rec.lineman_full),r.linemanNet.toFixed(2),r.grossTotal.toFixed(2),r.netTotal.toFixed(2),r.rangeMin.toFixed(2),r.rangeMax.toFixed(2),r.statusKey==="ok"?"ถูกต้อง":r.statusKey==="low"?"ยอดน้อย":r.statusKey==="high"?"ยอดมาก":"ไม่มีข้อมูล",rec.id];
+  try{
+    const resp=await fetch(SHEETS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:editingId?"update":"append",id:rec.id,row})});
+    return resp.ok;
+  }catch(e){console.warn("Sheets push failed:",e);return false;}
+}
+
+async function deleteRecord(id){
+  if(!confirm("ลบข้อมูลนี้ใช่ไหม?"))return;
+  await remove(ref(db,"records/"+id));
+  if(SHEETS_WEBAPP_URL&&SHEETS_WEBAPP_URL!=="YOUR_APPS_SCRIPT_WEBAPP_URL"){
+    fetch(SHEETS_WEBAPP_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"delete",id})}).catch(()=>{});
+  }
+}
+
+function editRecord(id){
+  const rec=allRecords[id];if(!rec)return;
+  editingId=id;
+  g("f-date").value=rec.date;g("f-staff").value=rec.staff||"";
+  ["m","l","b","c"].forEach(k=>{
+    g(k+"-prev").value=rec[k+"_prev"]||"";
+    g(k+"-add").value=rec[k+"_add"]||"";
+    g(k+"-left").value=rec[k+"_left"]||"";
+    calcSold(k);
+  });
+  g("pay-qr").value=rec.pay_qr||"";g("pay-cash").value=rec.pay_cash||"";
+  g("grab-full").value=rec.grab_full||"";updateGrabNet();
+  g("lineman-full").value=rec.lineman_full||"";updateLinemanNet();
+  g("auto-tag").style.display="none";
+  if(rec.result){lastResult=rec.result;renderResult(rec.result)}
+  switchTab("check");window.scrollTo(0,0);
+}
+
+function clearForm(){
+  editingId=null;lastResult=null;
+  ["f-staff","m-prev","m-add","m-left","l-prev","l-add","l-left","b-prev","b-add","b-left","c-prev","c-add","c-left","pay-qr","pay-cash","grab-full","lineman-full"].forEach(id=>{if(g(id))g(id).value=""});
+  g("f-date").value=todayStr();
+  ["m","l","b","c"].forEach(k=>{if(g(k+"-sold"))g(k+"-sold").textContent="0"});
+  g("grab-net").textContent="0.00 ฿";g("lineman-net").textContent="0.00 ฿";
+  g("result-box").style.display="none";g("auto-tag").style.display="none";
+  g("btn-save").disabled=false;
+  g("btn-save").textContent="💾 บันทึก + ส่งข้อมูลไป Google Sheets";
+}
+
+function updateGrabNet(){g("grab-net").textContent=fmt(num(val("grab-full"))*(1-GP))+" ฿";}
+function updateLinemanNet(){g("lineman-net").textContent=fmt(num(val("lineman-full"))*(1-GP))+" ฿";}
+
+// ── History
+function renderHistory(){
+  const q=(g("search-q")?.value||"").toLowerCase();
+  const recs=Object.values(allRecords).sort((a,b)=>b.date.localeCompare(a.date));
+  const list=recs.filter(r=>r.date?.includes(q)||r.staff?.toLowerCase().includes(q));
+  const cnt=g("record-count");if(cnt)cnt.textContent=list.length+" รายการ"+(q?` (กรอง "${q}")`:" ทั้งหมด");
+  const container=g("history-list");if(!container)return;
+  if(!recs.length){container.innerHTML=`<div class="empty"><div style="font-size:48px">📭</div><div>ยังไม่มีข้อมูลที่บันทึก</div></div>`;return;}
+  const SL={ok:"✅ ถูกต้อง",low:"❌ ยอดน้อย",high:"⚠️ ยอดมาก",nodata:"ℹ️ ไม่มีข้อมูล"};
+  container.innerHTML=list.map(rec=>{
+    const r=rec.result||{};
+    return `<div class="h-card" style="border-left-color:${r.statusColor||"#e7e5e4"}">
+<div class="h-head" data-toggle="${rec.id}">
+  <div><div class="h-date">${rec.date} <span style="font-size:13px;color:#94a3b8" id="arrow-${rec.id}">▼</span></div>
+  <div class="h-staff">${rec.staff||"ไม่ระบุชื่อ"}</div></div>
+  <div style="text-align:right">
+    <div class="h-status" style="color:${r.statusColor||"#94a3b8"}">${SL[r.statusKey]||""}</div>
+    <div class="h-gross">${fmt(r.grossTotal)} ฿</div>
+    <div class="h-sub">${r.totalCups||0} รายการ • สุทธิ ${fmt(r.netTotal)} ฿</div>
+  </div>
+</div>
+<div class="h-body" id="hbody-${rec.id}" style="display:none">
+  <div class="h-grid">
+    <span>Size M / L</span><span>${r.mSold||0} / ${r.lSold||0} แก้ว</span>
+    <span>บานาน่า สปริท</span><span>${r.bSold||0} จาน</span>
+    <span>Size S (ครีมชีส)</span><span>${r.cSold||0} แก้ว</span>
+    <span>ช่วงที่ยอมรับ</span><span>${fmt(r.rangeMin)} – ${fmt(r.rangeMax)} ฿</span>
+    <span>ยอด gross</span><span style="font-weight:700">${fmt(r.grossTotal)} ฿</span>
+    <span>ยอดสุทธิร้าน</span><span style="font-weight:700;color:#f97316">${fmt(r.netTotal)} ฿</span>
+  </div>
+  <div class="h-btns">
+    <button class="btn-ed" data-edit="${rec.id}">✏️ แก้ไข</button>
+    <button class="btn-del" data-del="${rec.id}">🗑️ ลบ</button>
+  </div>
+</div>
+</div>`;
+  }).join("");
+}
+
+// ── Tab switch
+function switchTab(t){
+  ["check","history","analytics"].forEach(tab=>{
+    g("page-"+tab).style.display=t===tab?"block":"none";
+    g("tab-"+tab).classList.toggle("active",t===tab);
+  });
+  if(t==="analytics")renderAnalytics(currentPeriod);
+  if(t==="history")renderHistory();
+  if(t==="check"&&!editingId)clearForm();
+}
+
+// ── Analytics
+function getFilteredRecords(period){
+  const recs=Object.values(allRecords).sort((a,b)=>a.date.localeCompare(b.date));
+  if(period==="all")return recs;
+  const cutoff=new Date();cutoff.setDate(cutoff.getDate()-parseInt(period));
+  const cutStr=cutoff.toISOString().split("T")[0];
+  return recs.filter(r=>r.date>=cutStr);
+}
+
+function renderAnalytics(period){
+  currentPeriod=period;
+  const recs=getFilteredRecords(period);
+  if(!recs.length){g("analytics-empty").style.display="block";g("analytics-content").style.display="none";return;}
+  g("analytics-empty").style.display="none";g("analytics-content").style.display="block";
+  const totalNet=recs.reduce((s,r)=>s+(r.result?.netTotal||0),0);
+  const totalCups=recs.reduce((s,r)=>s+(r.result?.totalCups||0),0);
+  const avgNet=totalNet/recs.length;
+  const okRate=Math.round((recs.filter(r=>r.result?.statusKey==="ok").length/recs.length)*100);
+  const bestRec=recs.reduce((best,r)=>(!best||(r.result?.netTotal||0)>(best.result?.netTotal||0))?r:best,null);
+  g("kpi-net").textContent=fmt(totalNet)+" ฿";
+  g("kpi-avg").textContent=fmt(avgNet)+" ฿";
+  g("kpi-cups").textContent=totalCups.toLocaleString("th-TH");
+  g("kpi-ok").textContent=okRate+"%";
+  g("kpi-days").textContent=recs.length+" วัน";
+  g("kpi-best").textContent=bestRec?`${bestRec.date} (${fmt(bestRec.result?.netTotal)} ฿)`:"-";
+
+  if(chartRevenue)chartRevenue.destroy();
+  chartRevenue=new Chart(g("chart-revenue").getContext("2d"),{type:"line",data:{labels:recs.map(r=>r.date.slice(5)),datasets:[{label:"ยอดสุทธิ",data:recs.map(r=>r.result?.netTotal||0),borderColor:"#f97316",backgroundColor:"rgba(249,115,22,0.12)",fill:true,tension:0.4,pointRadius:recs.length<=15?5:2,borderWidth:2.5},{label:"ยอด Gross",data:recs.map(r=>r.result?.grossTotal||0),borderColor:"#fbbf24",fill:false,tension:0.4,pointRadius:recs.length<=15?3:1,borderWidth:1.5,borderDash:[5,3]}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"top",labels:{font:{family:"Sarabun",size:12},boxWidth:14}}},scales:{x:{ticks:{font:{family:"Sarabun",size:11},maxRotation:45},grid:{color:"#f5f5f4"}},y:{ticks:{font:{family:"Sarabun",size:11},callback:v=>"฿"+v.toLocaleString("th-TH")},grid:{color:"#f5f5f4"}}}}});
+
+  const mT=recs.reduce((s,r)=>s+(r.result?.mSold||0),0);
+  const lT=recs.reduce((s,r)=>s+(r.result?.lSold||0),0);
+  const bT=recs.reduce((s,r)=>s+(r.result?.bSold||0),0);
+  const cT=recs.reduce((s,r)=>s+(r.result?.cSold||0),0);
+  if(chartItems)chartItems.destroy();
+  chartItems=new Chart(g("chart-items").getContext("2d"),{type:"doughnut",data:{labels:["Size M","Size L","บานาน่า","Size S ครีมชีส"],datasets:[{data:[mT,lT,bT,cT],backgroundColor:["#f97316","#fbbf24","#86efac","#93c5fd"],borderWidth:2,borderColor:"#fff"}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"bottom",labels:{font:{family:"Sarabun",size:11},boxWidth:12,padding:8}},tooltip:{callbacks:{label:ctx=>` ${ctx.label}: ${ctx.raw} (${Math.round(ctx.raw/(mT+lT+bT+cT)*100)}%)`}}},cutout:"60%"}});
+
+  const okC=recs.filter(r=>r.result?.statusKey==="ok").length;
+  const lowC=recs.filter(r=>r.result?.statusKey==="low").length;
+  const highC=recs.filter(r=>r.result?.statusKey==="high").length;
+  if(chartStatus)chartStatus.destroy();
+  chartStatus=new Chart(g("chart-status").getContext("2d"),{type:"bar",data:{labels:["✅ ถูกต้อง","❌ ยอดน้อย","⚠️ ยอดมาก"],datasets:[{data:[okC,lowC,highC],backgroundColor:["#22c55e","#ef4444","#f97316"],borderRadius:8,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{family:"Sarabun",size:11}},grid:{display:false}},y:{ticks:{font:{family:"Sarabun",size:11},stepSize:1},grid:{color:"#f5f5f4"}}}}});
+
+  const staffMap={};
+  recs.forEach(r=>{const s=r.staff||"ไม่ระบุ";if(!staffMap[s])staffMap[s]={days:0,net:0};staffMap[s].days++;staffMap[s].net+=r.result?.netTotal||0;});
+  g("staff-table").innerHTML=Object.entries(staffMap).sort((a,b)=>b[1].net-a[1].net).map(([name,d])=>`<tr><td>${name}</td><td style="text-align:center">${d.days}</td><td style="text-align:right;font-weight:700;color:#f97316">${fmt(d.net)} ฿</td><td style="text-align:right">${fmt(d.net/d.days)} ฿</td></tr>`).join("");
+}
+
+// ════════════════════════════════
+// EVENT DELEGATION (แทน onclick inline)
+// ════════════════════════════════
+document.addEventListener("click", e => {
+  // Tabs
+  const tabBtn = e.target.closest("[data-tab]");
+  if(tabBtn){ switchTab(tabBtn.dataset.tab); return; }
+
+  // Period buttons
+  const periodBtn = e.target.closest(".period-btn");
+  if(periodBtn){
+    document.querySelectorAll(".period-btn").forEach(b=>b.classList.remove("active"));
+    periodBtn.classList.add("active");
+    renderAnalytics(periodBtn.dataset.period);
+    return;
+  }
+
+  // Calc button
+  if(e.target.closest("#btn-calc")){ doCalc(); return; }
+
+  // Save button
+  if(e.target.closest("#btn-save")){ doSave(); return; }
+
+  // History toggle
+  const toggle = e.target.closest("[data-toggle]");
+  if(toggle){
+    const id=toggle.dataset.toggle;
+    const body=g("hbody-"+id),arrow=g("arrow-"+id);
+    const open=body.style.display==="block";
+    body.style.display=open?"none":"block";
+    if(arrow)arrow.textContent=open?"▼":"▲";
+    return;
+  }
+
+  // Edit
+  const editBtn = e.target.closest("[data-edit]");
+  if(editBtn){ editRecord(editBtn.dataset.edit); return; }
+
+  // Delete
+  const delBtn = e.target.closest("[data-del]");
+  if(delBtn){ deleteRecord(delBtn.dataset.del); return; }
+});
+
+// Input events — sold calculation
+document.addEventListener("input", e => {
+  const soldKey = e.target.dataset.sold;
+  if(soldKey) calcSold(soldKey);
+  if(e.target.id==="grab-full") updateGrabNet();
+  if(e.target.id==="lineman-full") updateLinemanNet();
+  if(e.target.id==="f-date" && !editingId) tryAutoFill(e.target.value);
+  if(e.target.id==="search-q") renderHistory();
+});
+
+// Init
+g("f-date").value = todayStr();
+tryAutoFill(todayStr());
+
+</script>
 </body>
 </html>
