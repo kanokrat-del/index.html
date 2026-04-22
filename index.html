@@ -30,7 +30,7 @@ measurementId: "G-G52DVFE9XM"
 };
 
 // 🔧 Google Sheets Web App URL — วาง URL จาก Apps Script ตรงนี้
-const SHEETS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzGUn5q0km91AqkU6W9B1IxBihCWHK9lZDjqTL8EqWBnkoBIZqSLPxvOFityt07xS_zCA/exec";
+const SHEETS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbwd3Y9mKmXCDd2h_nj_0ElByQ9-KDE6LHcTnzggA9YhOBPpNNxgS_zxc8aDvpv7Gonbkg/exec";
 
 // ════════════════════════════════════════════════════════
 const PRICE_M_MIN=55,PRICE_M_MAX=69,PRICE_L_MIN=79,PRICE_L_MAX=99;
@@ -241,7 +241,7 @@ btn.disabled = false;
 // GOOGLE SHEETS PUSH
 // ════════════════════════════════════════════════════════
 async function pushToSheets(rec) {
-if (SHEETS_WEBAPP_URL === "https://script.google.com/macros/s/AKfycbzGUn5q0km91AqkU6W9B1IxBihCWHK9lZDjqTL8EqWBnkoBIZqSLPxvOFityt07xS_zCA/exec") return false;
+if (SHEETS_WEBAPP_URL === "https://script.google.com/macros/s/AKfycbwd3Y9mKmXCDd2h_nj_0ElByQ9-KDE6LHcTnzggA9YhOBPpNNxgS_zxc8aDvpv7Gonbkg/exec") return false;
 const r = rec.result;
 const row = [
 rec.date, rec.staff,
@@ -254,7 +254,7 @@ r.rangeMin.toFixed(2), r.rangeMax.toFixed(2),
 r.statusKey==="ok"?"ถูกต้อง":r.statusKey==="low"?"ยอดน้อย":r.statusKey==="high"?"ยอดมาก":"ไม่มีข้อมูล",
 rec.id
 ];
-const resp = await fetch(SHEETS_WEBAPP_URL, {
+const resp = await fetch(https://script.google.com/macros/s/AKfycbwd3Y9mKmXCDd2h_nj_0ElByQ9-KDE6LHcTnzggA9YhOBPpNNxgS_zxc8aDvpv7Gonbkg/exec, {
 method:"POST",
 headers:{"Content-Type":"application/json"},
 body: JSON.stringify({ action: editingId ? "update" : "append", id: rec.id, row })
