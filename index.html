@@ -254,7 +254,7 @@ r.rangeMin.toFixed(2), r.rangeMax.toFixed(2),
 r.statusKey==="ok"?"ถูกต้อง":r.statusKey==="low"?"ยอดน้อย":r.statusKey==="high"?"ยอดมาก":"ไม่มีข้อมูล",
 rec.id
 ];
-const resp = await fetch("https://script.google.com/macros/s/AKfycbz8of38yUSkELaR6H4Vcvwl8AxA3MY9q6MR7DbygNSv_RT_62sX4ZnAXgTaFe-6vIgnLA/exec", {
+const resp = await fetch(SHEETS_WEBAPP_URL, {
 method:"POST",
 headers:{"Content-Type":"application/json"},
 body: JSON.stringify({ action: editingId ? "update" : "append", id: rec.id, row })
